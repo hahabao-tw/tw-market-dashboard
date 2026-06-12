@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台股籌碼日報</title>
+<meta name="description" content="每日自動更新:融資變化、三大法人未平倉、散戶多空比、選擇權最大未平倉">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@700;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --bg:#14161a;          /* 石墨底 */
+    --surface:#1c1f26;     /* 卡片 */
+    --surface2:#232732;
+    --line:#2e3340;
+    --ink:#e8e6e1;         /* 主文字 */
+    --dim:#8b8f9a;
+    --amber:#e8b04b;       /* 品牌琥珀 */
+    --up:#ff5d5d;          /* 紅:漲/多(台股慣例) */
+    --down:#2fbf71;        /* 綠:跌/空 */
+    --call:#5b8def;        /* 選擇權 Call */
+    --put:#e8b04b;         /* 選擇權 Put */
+    --radius:14px;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;scroll-padding-top:64px}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:'Noto Sans TC',sans-serif;font-size:15px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 14px 80px}
+
+  /* ── 頂欄 ── */
+  header.top{
+    position:sticky;top:0;z-index:50;background:rgba(20,22,26,.92);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  }
+  .top-inner{max-width:1080px;margin:0 auto;padding:10px 14px;
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .brand{font-family:'Noto Serif TC',serif;font-weight:900;font-size:1.15rem;
+    letter-spacing:.06em;white-space:nowrap}
+  .brand b{color:var(--amber)}
+  nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;flex:1}
+  nav::-webkit-scrollbar{display:none}
+  nav a{
+    color:var(--dim);text-decoration:none;font-size:.85rem;white-space:nowrap;
+    padding:5px 11px;border-radius:999px;border:1px solid transparent;
+  }
+  nav a:hover,nav a:focus-visible{color:var(--ink);border-color:var(--line)}
+  :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+  /* ── 盤勢快照(招牌元素) ── */
+  .board{
+    margin:18px 0 6px;border:1px solid var(--line);border-radius:var(--radius);
+    background:linear-gradient(180deg,var(--surface2),var(--surface));
+    overflow:hidden;
+  }
+  .board-head{
+    display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    padding:12px 16px 0;
+  }
+  .board-head h1{font-family:'Noto Serif TC',serif;font-size:1.05rem;font-weight:900;
+    letter-spacing:.12em;color:var(--amber)}
+  .board-head .stamp{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
+  .board-grid{
+    display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);
+    margin-top:12px;
+  }
+  @media(min-width:720px){.board-grid{grid-template-columns:repeat(3,1fr)}}
+  .cell{background:var(--surface);padding:12px 16px;min-height:74px}
+  .cell .k{font-size:.74rem;color:var(--dim);letter-spacing:.05em}
+  .cell .v{font-family:var(--mono);font-size:1.25rem;font-weight:600;
+    font-variant-numeric:tabular-nums;margin-top:2px}
+  .cell .sub{font-family:var(--mono);font-size:.74rem;color:var(--dim)}
+  .pos{color:var(--up)} .neg{color:var(--down)}
+
+  /* ── 區塊 ── */
+  section{margin-top:34px}
+  .sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    border-left:4px solid var(--amber);padding-left:12px;margin-bottom:14px}
+  .sec-head h2{font-family:'Noto Serif TC',serif;font-size:1.3rem;font-weight:900;
+    letter-spacing:.05em}
+  .sec-head .note{font-size:.78rem;color:var(--dim)}
+  .card{background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);padding:14px;margin-bottom:14px}
+  .chart{width:100%;height:320px}
+  @media(min-width:720px){.chart{height:380px}}
+  .empty{padding:36px 16px;text-align:center;color:var(--dim);font-size:.9rem}
+  .empty b{color:var(--amber)}
+
+  /* 切換鈕 */
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;
+    overflow:hidden;margin-bottom:12px}
+  .seg button{
+    background:none;border:none;color:var(--dim);font:inherit;font-size:.84rem;
+    padding:6px 16px;cursor:pointer;
+  }
+  .seg button.on{background:var(--amber);color:#14161a;font-weight:700}
+
+  /* 統計小卡列 */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+  .stat{background:var(--surface2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px}
+  .stat .k{font-size:.72rem;color:var(--dim)}
+  .stat .v{font-family:var(--mono);font-size:1.05rem;font-weight:600;
+    font-variant-numeric:tabular-nums}
+
+  /* 選擇權月份 chips */
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .chips button{background:var(--surface2);border:1px solid var(--line);
+    color:var(--dim);font:inherit;font-size:.82rem;font-family:var(--mono);
+    padding:5px 13px;border-radius:999px;cursor:pointer}
+  .chips button.on{border-color:var(--amber);color:var(--amber)}
+  .pk{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .pk .stat .v{font-size:1.2rem}
+  .tag-call{color:var(--call)} .tag-put{color:var(--put)}
+
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;
+    font-size:.76rem;color:var(--dim);line-height:1.9}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">台股<b>籌碼</b>日報</div>
+    <nav>
+      <a href="#margin">融資・量能</a>
+      <a href="#inst">三大法人</a>
+      <a href="#retail">散戶多空比</a>
+      <a href="#options">選擇權OI</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 盤勢快照 -->
+  <div class="board">
+    <div class="board-head">
+      <h1>盤後快照</h1>
+      <span class="stamp" id="board-stamp">--</span>
+    </div>
+    <div class="board-grid" id="board-grid"></div>
+  </div>
+
+  <!-- 1. 融資與量能 -->
+  <section id="margin">
+    <div class="sec-head">
+      <h2>融資餘額・成交量能</h2>
+      <span class="note">近 20 個交易日|單位:億元</span>
+    </div>
+    <div class="card">
+      <div id="chart-margin" class="chart"></div>
+    </div>
+    <div class="card">
+      <div id="chart-ratio" class="chart" style="height:240px"></div>
+    </div>
+  </section>
+
+  <!-- 2. 三大法人未平倉 -->
+  <section id="inst">
+    <div class="sec-head">
+      <h2>台指期三大法人未平倉</h2>
+      <span class="note">淨未平倉口數(多方−空方)</span>
+    </div>
+    <div class="card">
+      <div class="seg" id="seg-inst"></div>
+      <div class="stats" id="stats-inst"></div>
+      <div id="chart-inst" class="chart"></div>
+    </div>
+  </section>
+
+  <!-- 3. 散戶多空比 -->
+  <section id="retail">
+    <div class="sec-head">
+      <h2>散戶多空比</h2>
+      <span class="note">(散戶多單−散戶空單)÷ 全市場未平倉 ×100%</span>
+    </div>
+    <div class="card">
+      <div class="stats" id="stats-retail"></div>
+      <div id="chart-retail" class="chart"></div>
+    </div>
+  </section>
+
+  <!-- 4. 選擇權最大未平倉 -->
+  <section id="options">
+    <div class="sec-head">
+      <h2>台指選擇權最大未平倉</h2>
+      <span class="note" id="opt-date">--</span>
+    </div>
+    <div class="card">
+      <div class="chips" id="opt-chips"></div>
+      <div class="pk" id="opt-pk"></div>
+      <div id="chart-opt" class="chart"></div>
+    </div>
+  </section>
+
+  <footer>
+    資料來源:臺灣證券交易所、臺灣期貨交易所(每日盤後自動抓取)。<br>
+    散戶多空比為估算值:以全市場未平倉減去三大法人部位推得。本頁僅供參考,不構成投資建議。
+  </footer>
+</div>
+
+<script>
+(async function(){
+  const PROD = {TX:'大台', MTX:'小台', TMF:'微台'};
+  const fmt = n => n==null ? '--' : n.toLocaleString('zh-TW');
+  const sign = n => n>0 ? '+'+fmt(n) : fmt(n);
+  const cls = n => n>0 ? 'pos' : (n<0 ? 'neg' : '');
+
+  async function loadJSON(path){
+    try{
+      const r = await fetch(path + '?t=' + Date.now());
+      if(!r.ok) return null;
+      return await r.json();
+    }catch(e){ return null; }
+  }
+
+  function emptyCard(el, msg){
+    el.closest('.card').innerHTML =
+      '<div class="empty">尚無資料。' + (msg||'') +
+      '<br>請到 GitHub 的 <b>Actions</b> 頁面手動執行一次「更新市場資料」。</div>';
+  }
+
+  const baseOpt = {
+    backgroundColor:'transparent',
+    textStyle:{fontFamily:'Noto Sans TC', color:'#9b9fa9'},
+    grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis', backgroundColor:'#232732', borderColor:'#2e3340',
+      textStyle:{color:'#e8e6e1',fontSize:12}},
+    legend:{textStyle:{color:'#9b9fa9',fontSize:11},top:0,icon:'roundRect',
+      itemWidth:12,itemHeight:6},
+  };
+  const axisX = dates => ({type:'category', data:dates,
+    axisLine:{lineStyle:{color:'#2e3340'}}, axisLabel:{fontSize:10,color:'#8b8f9a',
+    formatter:v=>v.slice(5)}});
+  const axisY = (extra={}) => Object.assign({type:'value',
+    splitLine:{lineStyle:{color:'#23262e'}},
+    axisLabel:{fontSize:10,color:'#8b8f9a'}}, extra);
+
+  const charts = [];
+  function mkChart(id){
+    const el = document.getElementById(id);
+    if(!el) return null;
+    const c = echarts.init(el);
+    charts.push(c);
+    return c;
+  }
+  window.addEventListener('resize', ()=>charts.forEach(c=>c.resize()));
+
+  // ───────────────── 載入三份資料 ─────────────────
+  const [margin, futures, options] = await Promise.all([
+    loadJSON('data/margin.json'),
+    loadJSON('data/futures.json'),
+    loadJSON('data/options.json'),
+  ]);
+
+  // ───────────────── 盤後快照 ─────────────────
+  (function board(){
+    const g = document.getElementById('board-grid');
+    const cells = [];
+    let stamp = [];
+
+    if(margin && margin.rows && margin.rows.length){
+      const last = margin.rows[margin.rows.length-1];
+      stamp.push('融資 '+last.date);
+      cells.push({k:'融資餘額(億)', v:fmt(last.balance),
+        sub:'增減 <span class="'+cls(last.change)+'">'+sign(last.change)+'</span>'});
+      cells.push({k:'大盤成交金額(億)', v:fmt(last.turnover),
+        sub:'融資買進佔比 '+(last.ratio==null?'--':last.ratio+'%')});
+    }
+    if(futures && futures.history){
+      const tx = (futures.history.TX||[]).slice(-1)[0];
+      if(tx){
+        stamp.push('期貨 '+tx.date);
+        const f = tx.inst['外資'] ? tx.inst['外資'].net : null;
+        cells.push({k:'外資台指期淨OI(口)', v:'<span class="'+cls(f)+'">'+sign(f)+'</span>', sub:'大台'});
+      }
+      for(const code of ['MTX','TMF']){
+        const r = (futures.history[code]||[]).slice(-1)[0];
+        if(r) cells.push({k:PROD[code]+'散戶多空比',
+          v:'<span class="'+cls(r.retail.ratio)+'">'+
+            (r.retail.ratio>0?'+':'')+r.retail.ratio+'%</span>',
+          sub:'淨部位 '+sign(r.retail.net)+' 口'});
+      }
+    }
+    if(options && options.months && options.months.length){
+      const m = options.months[0];
+      cells.push({k:'近月選擇權 壓力/支撐',
+        v:'<span class="tag-call">'+fmt(m.call_max.strike)+'</span> / '+
+          '<span class="tag-put">'+fmt(m.put_max.strike)+'</span>',
+        sub:m.month.slice(0,4)+'/'+m.month.slice(4)+' 月'});
+    }
+
+    if(!cells.length){
+      g.innerHTML = '<div class="cell" style="grid-column:1/-1">'+
+        '<div class="empty">資料尚未產生 —— 上線後請先到 GitHub Actions 手動執行一次更新,'+
+        '幾分鐘後重新整理本頁。</div></div>';
+      return;
+    }
+    g.innerHTML = cells.map(c =>
+      '<div class="cell"><div class="k">'+c.k+'</div><div class="v">'+c.v+
+      '</div><div class="sub">'+(c.sub||'')+'</div></div>').join('');
+    document.getElementById('board-stamp').textContent = stamp.join('・');
+  })();
+
+  // ───────────────── 1. 融資與量能 ─────────────────
+  (function secMargin(){
+    const el1 = document.getElementById('chart-margin');
+    if(!margin || !margin.rows || !margin.rows.length){
+      emptyCard(el1); emptyCard(document.getElementById('chart-ratio')); return;
+    }
+    const rows = margin.rows.slice(-20);
+    const dates = rows.map(r=>r.date);
+
+    mkChart('chart-margin').setOption(Object.assign({}, baseOpt, {
+      legend:Object.assign({},baseOpt.legend,{data:['融資增減','融資餘額']}),
+      xAxis:axisX(dates),
+      yAxis:[axisY({name:'增減(億)'}), axisY({name:'餘額(億)',splitLine:{show:false}})],
+      series:[
+        {name:'融資增減', type:'bar', data:rows.map(r=>r.change),
+         itemStyle:{color:p=>p.value>=0?'#ff5d5d':'#2fbf71'}, barWidth:'55%'},
+        {name:'融資餘額', type:'line', yAxisIndex:1, data:rows.map(r=>r.balance),
+         lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'},
+         symbol:'circle', symbolSize:5},
+      ],
+    }));
+
+    mkChart('chart-ratio').setOption(Object.assign({}, baseOpt, {
+      legend:Object.assign({},baseOpt.legend,{data:['成交金額','融資買進佔比']}),
+      xAxis:axisX(dates),
+      yAxis:[axisY({name:'億元'}), axisY({name:'%',splitLine:{show:false}})],
+      series:[
+        {name:'成交金額', type:'bar', data:rows.map(r=>r.turnover),
+         itemStyle:{color:'#3a4154'}, barWidth:'55%'},
+        {name:'融資買進佔比', type:'line', yAxisIndex:1, data:rows.map(r=>r.ratio),
+         lineStyle:{color:'#5b8def',width:2}, itemStyle:{color:'#5b8def'},
+         symbol:'circle', symbolSize:4},
+      ],
+    }));
+  })();
+
+  // ───────────────── 2. 三大法人 ─────────────────
+  (function secInst(){
+    const el = document.getElementById('chart-inst');
+    if(!futures || !futures.history || !(futures.history.TX||[]).length){
+      emptyCard(el); return;
+    }
+    const seg = document.getElementById('seg-inst');
+    const chart = mkChart('chart-inst');
+    let cur = 'TX';
+
+    function render(){
+      const rows = (futures.history[cur]||[]).slice(-20);
+      const dates = rows.map(r=>r.date);
+      const get = role => rows.map(r=> r.inst[role] ? r.inst[role].net : null);
+      const last = rows[rows.length-1];
+
+      document.getElementById('stats-inst').innerHTML = last ?
+        ['外資','投信','自營商'].map(role=>{
+          const v = last.inst[role] ? last.inst[role].net : null;
+          return '<div class="stat"><div class="k">'+role+' 淨OI(口)</div>'+
+                 '<div class="v '+cls(v)+'">'+sign(v)+'</div></div>';
+        }).join('') : '';
+
+      chart.setOption(Object.assign({}, baseOpt, {
+        legend:Object.assign({},baseOpt.legend,{data:['外資','投信','自營商']}),
+        xAxis:axisX(dates),
+        yAxis:[axisY({name:'淨OI(口)'})],
+        series:[
+          {name:'外資', type:'line', data:get('外資'),
+           lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'}, symbol:'circle', symbolSize:4},
+          {name:'投信', type:'line', data:get('投信'),
+           lineStyle:{color:'#5b8def',width:2}, itemStyle:{color:'#5b8def'}, symbol:'circle', symbolSize:4},
+          {name:'自營商', type:'line', data:get('自營商'),
+           lineStyle:{color:'#b78ce0',width:2}, itemStyle:{color:'#b78ce0'}, symbol:'circle', symbolSize:4},
+        ],
+      }), true);
+    }
+
+    seg.innerHTML = Object.keys(PROD).map(c=>
+      '<button data-c="'+c+'" class="'+(c==='TX'?'on':'')+'">'+PROD[c]+'</button>').join('');
+    seg.addEventListener('click', e=>{
+      const b = e.target.closest('button'); if(!b) return;
+      cur = b.dataset.c;
+      seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on', x===b));
+      render();
+    });
+    render();
+  })();
+
+  // ───────────────── 3. 散戶多空比 ─────────────────
+  (function secRetail(){
+    const el = document.getElementById('chart-retail');
+    if(!futures || !futures.history || !(futures.history.TX||[]).length){
+      emptyCard(el); return;
+    }
+    const colors = {TX:'#e8e6e1', MTX:'#e8b04b', TMF:'#5b8def'};
+    const series = [], legends = [];
+    let dates = [];
+    document.getElementById('stats-retail').innerHTML =
+      Object.keys(PROD).map(code=>{
+        const rows = (futures.history[code]||[]).slice(-20);
+        if(rows.length > dates.length) dates = rows.map(r=>r.date);
+        legends.push(PROD[code]);
+        series.push({name:PROD[code], type:'line',
+          data:rows.map(r=>r.retail.ratio),
+          lineStyle:{color:colors[code],width:2}, itemStyle:{color:colors[code]},
+          symbol:'circle', symbolSize:4});
+        const last = rows[rows.length-1];
+        const v = last ? last.retail.ratio : null;
+        return '<div class="stat"><div class="k">'+PROD[code]+'(今日)</div>'+
+               '<div class="v '+cls(v)+'">'+(v==null?'--':(v>0?'+':'')+v+'%')+'</div></div>';
+      }).join('');
+
+    mkChart('chart-retail').setOption(Object.assign({}, baseOpt, {
+      legend:Object.assign({},baseOpt.legend,{data:legends}),
+      xAxis:axisX(dates),
+      yAxis:[axisY({name:'%'})],
+      series:series.map((s,i)=> i===0 ? Object.assign(s,{markLine:{
+        symbol:'none', label:{show:false},
+        lineStyle:{color:'#555c6e',type:'dashed'}, data:[{yAxis:0}]}}) : s),
+    }));
+  })();
+
+  // ───────────────── 4. 選擇權最大OI ─────────────────
+  (function secOpt(){
+    const el = document.getElementById('chart-opt');
+    if(!options || !options.months || !options.months.length){
+      emptyCard(el); return;
+    }
+    document.getElementById('opt-date').textContent =
+      '資料日:'+options.date+'|台指選擇權(TXO)月選';
+    const chips = document.getElementById('opt-chips');
+    const chart = mkChart('chart-opt');
+    let idx = 0;
+
+    function render(){
+      const m = options.months[idx];
+      document.getElementById('opt-pk').innerHTML =
+        '<div class="stat"><div class="k tag-call">壓力參考(Call 最大OI)</div>'+
+        '<div class="v">'+fmt(m.call_max.strike)+'</div>'+
+        '<div class="k">'+fmt(m.call_max.oi)+' 口</div></div>'+
+        '<div class="stat"><div class="k tag-put">支撐參考(Put 最大OI)</div>'+
+        '<div class="v">'+fmt(m.put_max.strike)+'</div>'+
+        '<div class="k">'+fmt(m.put_max.oi)+' 口</div></div>';
+
+      // 只畫有量的履約價區間,圖才不會被拉太寬
+      const chain = m.chain.filter(r => r.c>0 || r.p>0);
+      chart.setOption(Object.assign({}, baseOpt, {
+        legend:Object.assign({},baseOpt.legend,{data:['Call OI','Put OI']}),
+        dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
+          borderColor:'#2e3340', backgroundColor:'#1c1f26',
+          fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'}}],
+        grid:{left:8,right:8,top:36,bottom:30,containLabel:true},
+        xAxis:{type:'category', data:chain.map(r=>r.k),
+          axisLine:{lineStyle:{color:'#2e3340'}},
+          axisLabel:{fontSize:10,color:'#8b8f9a'}},
+        yAxis:[axisY({name:'口'})],
+        series:[
+          {name:'Call OI', type:'bar', data:chain.map(r=>r.c),
+           itemStyle:{color:'#5b8def'}, barGap:'10%'},
+          {name:'Put OI', type:'bar', data:chain.map(r=>r.p),
+           itemStyle:{color:'#e8b04b'}},
+        ],
+      }), true);
+    }
+
+    chips.innerHTML = options.months.map((m,i)=>
+      '<button data-i="'+i+'" class="'+(i===0?'on':'')+'">'+
+      m.month.slice(0,4)+'/'+m.month.slice(4)+'</button>').join('');
+    chips.addEventListener('click', e=>{
+      const b = e.target.closest('button'); if(!b) return;
+      idx = +b.dataset.i;
+      chips.querySelectorAll('button').forEach(x=>x.classList.toggle('on', x===b));
+      render();
+    });
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
