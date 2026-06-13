@@ -68,7 +68,11 @@
   .board-head .stamp{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
   .board-grid{
     display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);
-    margin-top:12px;
+    margin-top:0;border-top:1px solid var(--line);
+  }
+  .board-section-label{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;color:var(--amber);
+    padding:12px 16px 5px;background:var(--surface);text-transform:uppercase;
   }
   @media(min-width:720px){.board-grid{grid-template-columns:repeat(3,1fr)}}
   .cell{background:var(--surface);padding:12px 16px;min-height:74px}
@@ -145,14 +149,17 @@
       <h1>盤後快照</h1>
       <span class="stamp" id="board-stamp">--</span>
     </div>
-    <div class="board-grid" id="board-grid"></div>
+    <div class="board-section-label">股票市場</div>
+    <div class="board-grid" id="board-stock"></div>
+    <div class="board-section-label">期貨市場</div>
+    <div class="board-grid" id="board-futures"></div>
   </div>
 
   <!-- 1. 融資與量能 -->
   <section id="margin">
     <div class="sec-head">
       <h2>融資餘額・成交量能</h2>
-      <span class="note">近 20 個交易日|單位:億元</span>
+      <span class="note">近 30 個交易日|單位:億元</span>
     </div>
     <div class="card">
       <div id="chart-margin" class="chart"></div>
@@ -162,11 +169,10 @@
     </div>
   </section>
 
-  <!-- 2. 三大法人未平倉 -->
-  <section id="inst">
+  <!-- 2. 三大法人未平倉 -->  <section id="inst">
     <div class="sec-head">
       <h2>台指期三大法人未平倉</h2>
-      <span class="note">淨未平倉口數(多方−空方)</span>
+      <span class="note">近 30 日|淨未平倉口數(多方−空方),分組柱形圖</span>
     </div>
     <div class="card">
       <div class="seg" id="seg-inst"></div>
@@ -179,7 +185,7 @@
   <section id="retail">
     <div class="sec-head">
       <h2>散戶多空比</h2>
-      <span class="note">(散戶多單−散戶空單)÷ 全市場未平倉 ×100%</span>
+      <span class="note">近 30 日|(散戶多單−散戶空單)÷ 全市場未平倉 ×100%</span>
     </div>
     <div class="card">
       <div class="stats" id="stats-retail"></div>
@@ -261,29 +267,48 @@
   ]);
 
   // ───────────────── 盤後快照 ─────────────────
+  function renderCells(elId, cells){
+    const g = document.getElementById(elId);
+    if(!cells.length){
+      g.innerHTML = '<div class="cell" style="grid-column:1/-1">'+
+        '<div class="empty">資料尚未產生 —— 請到 GitHub Actions 手動執行一次更新,'+
+        '幾分鐘後重新整理。</div></div>';
+      return;
+    }
+    g.innerHTML = cells.map(c =>
+      '<div class="cell"><div class="k">'+c.k+'</div><div class="v">'+c.v+
+      '</div><div class="sub">'+(c.sub||'')+'</div></div>').join('');
+  }
+
   (function board(){
-    const g = document.getElementById('board-grid');
-    const cells = [];
+    const stock = [], fut = [];
     let stamp = [];
 
+    // ── 股票市場 ──
     if(margin && margin.rows && margin.rows.length){
       const last = margin.rows[margin.rows.length-1];
-      stamp.push('融資 '+last.date);
-      cells.push({k:'融資餘額(億)', v:fmt(last.balance),
+      stamp.push('股市 '+last.date);
+      stock.push({k:'上市總市值(億)', v:fmt(last.mktcap), sub:'集中市場'});
+      stock.push({k:'融資餘額(億)', v:fmt(last.balance),
         sub:'增減 <span class="'+cls(last.change)+'">'+sign(last.change)+'</span>'});
-      cells.push({k:'大盤成交金額(億)', v:fmt(last.turnover),
-        sub:'融資買進佔比 '+(last.ratio==null?'--':last.ratio+'%')});
+      stock.push({k:'大盤成交金額(億)', v:fmt(last.turnover), sub:'集中市場'});
+      stock.push({k:'融資槓桿比', v:(last.leverage==null?'--':last.leverage+'%'),
+        sub:'融資餘額 ÷ 總市值'});
     }
+    renderCells('board-stock', stock);
+
+    // ── 期貨市場 ──
     if(futures && futures.history){
       const tx = (futures.history.TX||[]).slice(-1)[0];
       if(tx){
         stamp.push('期貨 '+tx.date);
         const f = tx.inst['外資'] ? tx.inst['外資'].net : null;
-        cells.push({k:'外資台指期淨OI(口)', v:'<span class="'+cls(f)+'">'+sign(f)+'</span>', sub:'大台'});
+        fut.push({k:'外資大台淨OI(口)', v:'<span class="'+cls(f)+'">'+sign(f)+'</span>',
+          sub:'臺股期貨'});
       }
       for(const code of ['MTX','TMF']){
         const r = (futures.history[code]||[]).slice(-1)[0];
-        if(r) cells.push({k:PROD[code]+'散戶多空比',
+        if(r) fut.push({k:PROD[code]+'散戶多空比',
           v:'<span class="'+cls(r.retail.ratio)+'">'+
             (r.retail.ratio>0?'+':'')+r.retail.ratio+'%</span>',
           sub:'淨部位 '+sign(r.retail.net)+' 口'});
@@ -291,21 +316,14 @@
     }
     if(options && options.months && options.months.length){
       const m = options.months[0];
-      cells.push({k:'近月選擇權 壓力/支撐',
+      const tag = m.kind==='weekly' ? '週選' : '月選';
+      fut.push({k:'近月選擇權 壓力/支撐',
         v:'<span class="tag-call">'+fmt(m.call_max.strike)+'</span> / '+
           '<span class="tag-put">'+fmt(m.put_max.strike)+'</span>',
-        sub:m.month.slice(0,4)+'/'+m.month.slice(4)+' 月'});
+        sub:m.month+' '+tag});
     }
+    renderCells('board-futures', fut);
 
-    if(!cells.length){
-      g.innerHTML = '<div class="cell" style="grid-column:1/-1">'+
-        '<div class="empty">資料尚未產生 —— 上線後請先到 GitHub Actions 手動執行一次更新,'+
-        '幾分鐘後重新整理本頁。</div></div>';
-      return;
-    }
-    g.innerHTML = cells.map(c =>
-      '<div class="cell"><div class="k">'+c.k+'</div><div class="v">'+c.v+
-      '</div><div class="sub">'+(c.sub||'')+'</div></div>').join('');
     document.getElementById('board-stamp').textContent = stamp.join('・');
   })();
 
@@ -315,7 +333,7 @@
     if(!margin || !margin.rows || !margin.rows.length){
       emptyCard(el1); emptyCard(document.getElementById('chart-ratio')); return;
     }
-    const rows = margin.rows.slice(-20);
+    const rows = margin.rows.slice(-30);
     const dates = rows.map(r=>r.date);
 
     mkChart('chart-margin').setOption(Object.assign({}, baseOpt, {
@@ -332,13 +350,13 @@
     }));
 
     mkChart('chart-ratio').setOption(Object.assign({}, baseOpt, {
-      legend:Object.assign({},baseOpt.legend,{data:['成交金額','融資買進佔比']}),
+      legend:Object.assign({},baseOpt.legend,{data:['成交金額','融資槓桿比']}),
       xAxis:axisX(dates),
       yAxis:[axisY({name:'億元'}), axisY({name:'%',splitLine:{show:false}})],
       series:[
         {name:'成交金額', type:'bar', data:rows.map(r=>r.turnover),
          itemStyle:{color:'#3a4154'}, barWidth:'55%'},
-        {name:'融資買進佔比', type:'line', yAxisIndex:1, data:rows.map(r=>r.ratio),
+        {name:'融資槓桿比', type:'line', yAxisIndex:1, data:rows.map(r=>r.leverage),
          lineStyle:{color:'#5b8def',width:2}, itemStyle:{color:'#5b8def'},
          symbol:'circle', symbolSize:4},
       ],
@@ -356,7 +374,7 @@
     let cur = 'TX';
 
     function render(){
-      const rows = (futures.history[cur]||[]).slice(-20);
+      const rows = (futures.history[cur]||[]).slice(-30);
       const dates = rows.map(r=>r.date);
       const get = role => rows.map(r=> r.inst[role] ? r.inst[role].net : null);
       const last = rows[rows.length-1];
@@ -368,17 +386,21 @@
                  '<div class="v '+cls(v)+'">'+sign(v)+'</div></div>';
         }).join('') : '';
 
+      const barSeries = (name,color)=>({name, type:'bar', data:get(name),
+        itemStyle:{color}, barMaxWidth:14});
       chart.setOption(Object.assign({}, baseOpt, {
         legend:Object.assign({},baseOpt.legend,{data:['外資','投信','自營商']}),
+        dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
+          borderColor:'#2e3340', backgroundColor:'#1c1f26',
+          fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'},
+          startValue:dates.length>15?dates.length-15:0}],
+        grid:{left:8,right:8,top:36,bottom:30,containLabel:true},
         xAxis:axisX(dates),
         yAxis:[axisY({name:'淨OI(口)'})],
         series:[
-          {name:'外資', type:'line', data:get('外資'),
-           lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'}, symbol:'circle', symbolSize:4},
-          {name:'投信', type:'line', data:get('投信'),
-           lineStyle:{color:'#5b8def',width:2}, itemStyle:{color:'#5b8def'}, symbol:'circle', symbolSize:4},
-          {name:'自營商', type:'line', data:get('自營商'),
-           lineStyle:{color:'#b78ce0',width:2}, itemStyle:{color:'#b78ce0'}, symbol:'circle', symbolSize:4},
+          barSeries('外資','#e8b04b'),
+          barSeries('投信','#5b8def'),
+          barSeries('自營商','#b78ce0'),
         ],
       }), true);
     }
@@ -394,7 +416,7 @@
     render();
   })();
 
-  // ───────────────── 3. 散戶多空比 ─────────────────
+  // ───────────────── 3. 散戶多空比(橫向分組柱形圖) ─────────────────
   (function secRetail(){
     const el = document.getElementById('chart-retail');
     if(!futures || !futures.history || !(futures.history.TX||[]).length){
@@ -403,28 +425,39 @@
     const colors = {TX:'#e8e6e1', MTX:'#e8b04b', TMF:'#5b8def'};
     const series = [], legends = [];
     let dates = [];
+    Object.keys(PROD).forEach(code=>{
+      const rows = (futures.history[code]||[]).slice(-30);
+      if(rows.length > dates.length) dates = rows.map(r=>r.date);
+    });
     document.getElementById('stats-retail').innerHTML =
       Object.keys(PROD).map(code=>{
-        const rows = (futures.history[code]||[]).slice(-20);
-        if(rows.length > dates.length) dates = rows.map(r=>r.date);
+        const rows = (futures.history[code]||[]).slice(-30);
         legends.push(PROD[code]);
-        series.push({name:PROD[code], type:'line',
-          data:rows.map(r=>r.retail.ratio),
-          lineStyle:{color:colors[code],width:2}, itemStyle:{color:colors[code]},
-          symbol:'circle', symbolSize:4});
+        // 對齊日期軸:用 date → ratio 映射
+        const map = {}; rows.forEach(r=>map[r.date]=r.retail.ratio);
+        series.push({name:PROD[code], type:'bar',
+          data:dates.map(d=> d in map ? map[d] : null),
+          itemStyle:{color:colors[code]}, barMaxWidth:7});
         const last = rows[rows.length-1];
         const v = last ? last.retail.ratio : null;
         return '<div class="stat"><div class="k">'+PROD[code]+'(今日)</div>'+
                '<div class="v '+cls(v)+'">'+(v==null?'--':(v>0?'+':'')+v+'%')+'</div></div>';
       }).join('');
 
+    // 橫向:類目軸放 y(日期),數值軸放 x(%)。30 天較高,容器加高 + 內部捲動
+    el.style.height = '620px';
     mkChart('chart-retail').setOption(Object.assign({}, baseOpt, {
       legend:Object.assign({},baseOpt.legend,{data:legends}),
-      xAxis:axisX(dates),
-      yAxis:[axisY({name:'%'})],
+      grid:{left:8,right:14,top:36,bottom:8,containLabel:true},
+      tooltip:Object.assign({},baseOpt.tooltip,{
+        axisPointer:{type:'shadow'}}),
+      xAxis:[axisY({name:'多空比 %', splitLine:{lineStyle:{color:'#23262e'}}})],
+      yAxis:{type:'category', data:dates, inverse:true,
+        axisLine:{lineStyle:{color:'#2e3340'}},
+        axisLabel:{fontSize:10,color:'#8b8f9a',formatter:v=>v.slice(5)}},
       series:series.map((s,i)=> i===0 ? Object.assign(s,{markLine:{
         symbol:'none', label:{show:false},
-        lineStyle:{color:'#555c6e',type:'dashed'}, data:[{yAxis:0}]}}) : s),
+        lineStyle:{color:'#555c6e',type:'dashed'}, data:[{xAxis:0}]}}) : s),
     }));
   })();
 
@@ -435,7 +468,7 @@
       emptyCard(el); return;
     }
     document.getElementById('opt-date').textContent =
-      '資料日:'+options.date+'|台指選擇權(TXO)月選';
+      '資料日:'+options.date+'|台指選擇權(TXO)・一般交易時段';
     const chips = document.getElementById('opt-chips');
     const chart = mkChart('chart-opt');
     let idx = 0;
@@ -471,9 +504,11 @@
       }), true);
     }
 
-    chips.innerHTML = options.months.map((m,i)=>
-      '<button data-i="'+i+'" class="'+(i===0?'on':'')+'">'+
-      m.month.slice(0,4)+'/'+m.month.slice(4)+'</button>').join('');
+    chips.innerHTML = options.months.map((m,i)=>{
+      const tag = m.kind==='weekly' ? '週選' : '月選';
+      return '<button data-i="'+i+'" class="'+(i===0?'on':'')+'">'+
+        m.month+' <span style="opacity:.6">'+tag+'</span></button>';
+    }).join('');
     chips.addEventListener('click', e=>{
       const b = e.target.closest('button'); if(!b) return;
       idx = +b.dataset.i;
