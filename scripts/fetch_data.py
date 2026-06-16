@@ -64,12 +64,18 @@ def http_get(url, timeout=30):
         return r.read()
 
 
-def http_post(url, params, timeout=60):
+def http_post(url, params, timeout=60, referer=None):
     data = urllib.parse.urlencode(params).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={
+    headers = {
         "User-Agent": UA,
         "Content-Type": "application/x-www-form-urlencoded",
-    })
+        "Accept": "text/csv,application/csv,text/html,*/*",
+    }
+    if referer:
+        # 期交所部分下載端點會檢查來源頁,沒帶 Referer 會回 HTML 錯誤頁
+        headers["Referer"] = referer
+        headers["Origin"] = "https://www.taifex.com.tw"
+    req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -133,11 +139,15 @@ def fetch_taifex_institutional(start, end):
             "queryStartDate": s.strftime("%Y/%m/%d"),
             "queryEndDate": e.strftime("%Y/%m/%d"),
             "commodityId": "",
-        })
+        }, referer="https://www.taifex.com.tw/cht/3/futContractsDate")
         rows = decode_csv(raw)
         if not rows:
             continue
         header = rows[0]
+        # 若回傳的是 HTML 錯誤頁,第一格會是 <!DOCTYPE...>,印出協助診斷
+        if header and "<" in header[0]:
+            log(f"三大法人回傳非 CSV(前80字): {raw[:80]}")
+            continue
         i_date = col_index(header, "日期")
         i_prod = col_index(header, "商品名稱")
         i_role = col_index(header, "身份別") or col_index(header, "身分別")
@@ -169,7 +179,7 @@ def fetch_taifex_market_oi(code, start, end):
             "commodity_id": code,
             "queryStartDate": s.strftime("%Y/%m/%d"),
             "queryEndDate": e.strftime("%Y/%m/%d"),
-        })
+        }, referer="https://www.taifex.com.tw/cht/3/futDailyMarketReport")
         rows = decode_csv(raw)
         if not rows:
             continue
@@ -285,7 +295,7 @@ def update_options():
         "commodity_id": "TXO",
         "queryStartDate": start.strftime("%Y/%m/%d"),
         "queryEndDate": end.strftime("%Y/%m/%d"),
-    })
+    }, referer="https://www.taifex.com.tw/cht/3/optDailyMarketReport")
     rows = decode_csv(raw)
     if not rows:
         log("選擇權無資料")
