@@ -455,32 +455,36 @@ def fetch_margin_day(date_iso):
     return None
 
 
-def fetch_market_cap(date_iso):
-    """上市公司總市值(億元)。證交所當日資料用 www 網域;openapi 只有前一日。
-    來源欄位待第一次執行確認,故印出嘗試結果。回傳 億元 或 None。"""
-    ymd = date_iso.replace("-", "")
-    # MI_INDEX 大盤統計含「股票市場成交統計」與市值;嘗試 JSON 版
-    url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
-           f"?date={ymd}&type=MS&response=json")
+def fetch_market_cap_recent():
+    """上市公司總市值。來源:證交所首頁 API,回傳近 5 個交易日。
+    格式: [["06/10",1410325.63],...,["06/16",1494422.39]]  單位:億元。
+    回傳 {ISO日期: 市值(億)}。只給近數日,故僅最新幾天的槓桿比算得出。"""
+    url = "https://www.twse.com.tw/rwd/homeApi/mkt_cap"
     try:
-        j = twse_json(url)
+        raw = http_get(url)
+        arr = json.loads(raw.decode("utf-8"))
     except Exception as e:
-        log(f"市值 MI_INDEX {date_iso} 失敗: {e}")
-        return None
-    # MI_INDEX 回傳多張表,市值通常在「上市公司市值」或含「市值」的列
-    tables = j.get("tables") or []
-    for t in tables:
-        title = str(t.get("title", ""))
-        for row in (t.get("data") or []):
-            joined = "".join(str(c) for c in row)
-            if "市值" in joined or "市值" in title:
-                for c in row:
-                    v = num(c)
-                    if v and v > 1e10:        # 市值應為兆元級(元為單位 > 100億)
-                        log(f"市值疑似命中: {row}")
-                        return round(v / 1e8, 0)   # 元 → 億元
-    log(f"市值未在 MI_INDEX 找到,表標題: {[t.get('title') for t in tables]}")
-    return None
+        log(f"市值 mkt_cap 抓取/解析失敗: {e}")
+        return {}
+    log(f"市值 mkt_cap 回傳: {str(arr)[:200]}")
+    out = {}
+    year = NOW.year
+    for item in (arr or []):
+        try:
+            md, val = item[0], num(item[1])
+        except (TypeError, IndexError):
+            continue
+        if val is None:
+            continue
+        # "06/16" → 補上年份;若月份大於當前月份(跨年初情境)則用去年
+        try:
+            mm, dd = md.replace("-", "/").split("/")
+            y = year if int(mm) <= NOW.month else year - 1
+            iso = f"{y}-{int(mm):02d}-{int(dd):02d}"
+        except (ValueError, AttributeError):
+            continue
+        out[iso] = round(val, 1)
+    return out
 
 
 def update_margin():
@@ -499,6 +503,8 @@ def update_margin():
         log("FMTQIK 無資料")
         return False
 
+    mktcap_map = fetch_market_cap_recent()   # {ISO: 市值億},僅近數日
+
     existing = {r["date"] for r in rows}
     targets = [d for d in sorted(turnover.keys()) if d not in existing]
     targets = targets[-30:]   # 單次最多補 30 個交易日
@@ -510,9 +516,8 @@ def update_margin():
             continue
         bal_k, buy_k = res                  # 仟元
         amt = turnover[d]                    # 元
-        mktcap = fetch_market_cap(d)         # 億元 或 None
-        time.sleep(3)
         bal_e = round(bal_k / 1e5, 1)        # 融資餘額(億元)
+        mktcap = mktcap_map.get(d)           # 億元 或 None(僅近數日有)
         # 槓桿比 = 融資餘額 ÷ 上市總市值 ×100%
         leverage = round(bal_e / mktcap * 100, 3) if mktcap else None
         rows.append({
@@ -523,6 +528,13 @@ def update_margin():
             "leverage": leverage,                      # 融資餘額/總市值 %
         })
         changed = True
+
+    # 對已存在但缺市值的最近幾筆,用本次抓到的 mktcap 補上
+    for r in rows:
+        if r.get("mktcap") is None and r["date"] in mktcap_map:
+            r["mktcap"] = mktcap_map[r["date"]]
+            r["leverage"] = round(r["balance"] / r["mktcap"] * 100, 3) if r["mktcap"] else None
+            changed = True
 
     if changed:
         rows.sort(key=lambda r: r["date"])
