@@ -53,22 +53,36 @@
   nav a:hover,nav a:focus-visible{color:var(--ink);border-color:var(--line)}
   :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 
+  .fontctl{display:flex;gap:3px;flex-shrink:0}
+  .fontctl button{
+    background:var(--surface2);border:1px solid var(--line);color:var(--dim);
+    font-family:var(--mono);font-size:.8rem;cursor:pointer;border-radius:7px;
+    width:30px;height:30px;line-height:1;padding:0;
+  }
+  .fontctl button:hover{color:var(--amber);border-color:var(--amber)}
+  .fontctl button:active{background:var(--amber);color:#14161a}
+
+  /* 兩個市場快照各自獨立成卡片,明確切開 */
+  .board-block{
+    border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+    background:linear-gradient(180deg,var(--surface2),var(--surface));
+  }
+  .board-block + .board-block{margin-top:12px}
+
   /* ── 盤勢快照(招牌元素) ── */
   .board{
-    margin:18px 0 6px;border:1px solid var(--line);border-radius:var(--radius);
-    background:linear-gradient(180deg,var(--surface2),var(--surface));
-    overflow:hidden;
+    margin:18px 0 6px;
   }
   .board-head{
     display:flex;justify-content:space-between;align-items:baseline;gap:10px;
-    padding:12px 16px 0;
+    padding:0 4px 10px;
   }
   .board-head h1{font-family:'Noto Serif TC',serif;font-size:1.05rem;font-weight:900;
     letter-spacing:.12em;color:var(--amber)}
   .board-head .stamp{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
   .board-grid{
     display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);
-    margin-top:0;border-top:1px solid var(--line);
+    border-top:1px solid var(--line);
   }
   .board-section-label{
     font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;color:var(--amber);
@@ -139,6 +153,11 @@
       <a href="#retail">散戶多空比</a>
       <a href="#options">選擇權OI</a>
     </nav>
+    <div class="fontctl" id="fontctl">
+      <button data-act="dec" title="縮小字體">A−</button>
+      <button data-act="reset" title="恢復預設">A</button>
+      <button data-act="inc" title="放大字體">A+</button>
+    </div>
   </div>
 </header>
 
@@ -150,17 +169,21 @@
       <h1>盤後快照</h1>
       <span class="stamp" id="board-stamp">--</span>
     </div>
-    <div class="board-section-label">股票市場</div>
-    <div class="board-grid board-grid-3" id="board-stock"></div>
-    <div class="board-section-label">期貨市場</div>
-    <div class="board-grid" id="board-futures"></div>
+    <div class="board-block">
+      <div class="board-section-label">股票市場</div>
+      <div class="board-grid board-grid-3" id="board-stock"></div>
+    </div>
+    <div class="board-block">
+      <div class="board-section-label">期貨市場</div>
+      <div class="board-grid board-grid-3" id="board-futures"></div>
+    </div>
   </div>
 
   <!-- 1. 融資與量能 -->
   <section id="margin">
     <div class="sec-head">
       <h2>融資餘額・成交量能</h2>
-      <span class="note">近 30 個交易日|單位:億元</span>
+      <span class="note">近 60 個交易日|單位:億元</span>
     </div>
     <div class="card">
       <div id="chart-margin" class="chart"></div>
@@ -173,7 +196,7 @@
   <!-- 2. 三大法人未平倉 -->  <section id="inst">
     <div class="sec-head">
       <h2>台指期三大法人未平倉</h2>
-      <span class="note">近 30 日|淨未平倉口數(多方−空方),分組柱形圖</span>
+      <span class="note">近 60 日|淨未平倉口數(多方−空方),走勢線圖</span>
     </div>
     <div class="card">
       <div class="seg" id="seg-inst"></div>
@@ -186,7 +209,7 @@
   <section id="retail">
     <div class="sec-head">
       <h2>散戶多空比</h2>
-      <span class="note">近 30 日|正值(紅)偏多、負值(綠)偏空</span>
+      <span class="note">近 60 日|正值(紅)偏多、負值(綠)偏空</span>
     </div>
     <div class="card">
       <div class="seg" id="seg-retail"></div>
@@ -261,6 +284,30 @@
   }
   window.addEventListener('resize', ()=>charts.forEach(c=>c.resize()));
 
+  // ── 字體縮放控制 ──
+  (function fontControl(){
+    const ctl = document.getElementById('fontctl');
+    if(!ctl) return;
+    const MIN=0.8, MAX=1.6, STEP=0.1;
+    let scale = 1;
+    try{ const s=parseFloat(localStorage.getItem('fontScale')); if(s) scale=s; }catch(e){}
+    function apply(){
+      scale = Math.min(MAX, Math.max(MIN, Math.round(scale*10)/10));
+      document.body.style.zoom = scale;            // 整頁縮放(含圖表)
+      try{ localStorage.setItem('fontScale', scale); }catch(e){}
+      setTimeout(()=>charts.forEach(c=>c.resize()), 50);
+    }
+    ctl.addEventListener('click', e=>{
+      const b=e.target.closest('button'); if(!b) return;
+      const a=b.dataset.act;
+      if(a==='inc') scale+=STEP;
+      else if(a==='dec') scale-=STEP;
+      else scale=1;
+      apply();
+    });
+    if(scale!==1) apply();
+  })();
+
   // ───────────────── 載入三份資料 ─────────────────
   const [margin, futures, options, taiex] = await Promise.all([
     loadJSON('data/margin.json'),
@@ -300,7 +347,7 @@
       stock.push({k:'加權指數收盤', v:fmt(taiex.taiex.close), sub:cpStr||'—'});
     } else if(mlast){
       stamp.push('股市 '+mlast.date);
-      stock.push({k:'加權指數收盤', v:'--', sub:'待 20:00 更新'});
+      stock.push({k:'加權指數收盤', v:'--', sub:'待早上 07:00 更新'});
     }
     if(mlast){
       stock.push({k:'大盤成交金額(億)', v:fmt(mlast.turnover), sub:'集中市場'});
@@ -309,7 +356,7 @@
       stock.push({k:'台積電大盤影響點數', v:taiex.impact,
         sub:'台積電每跳 1 元 ≈ '+taiex.impact+' 點'});
     } else {
-      stock.push({k:'台積電大盤影響點數', v:'--', sub:'待 20:00 更新'});
+      stock.push({k:'台積電大盤影響點數', v:'--', sub:'待早上 07:00 更新'});
     }
     if(mlast){
       stock.push({k:'上市總市值(億)', v:fmt(mlast.mktcap), sub:'集中市場'});
@@ -321,20 +368,18 @@
     renderCells('board-stock', stock);
 
     // ── 期貨市場 ──
+    // 第1行:外資大台淨OI、投信大台淨OI、近月選擇權壓力/支撐
+    // 第2行:小台散戶多空比、微台散戶多空比、臺指選擇權 P/C 比
     if(futures && futures.history){
       const tx = (futures.history.TX||[]).slice(-1)[0];
       if(tx){
         stamp.push('期貨 '+tx.date);
-        const f = tx.inst['外資'] ? tx.inst['外資'].net : null;
-        fut.push({k:'外資大台淨OI(口)', v:'<span class="'+cls(f)+'">'+sign(f)+'</span>',
+        const fr = tx.inst['外資'] ? tx.inst['外資'].net : null;
+        const it = tx.inst['投信'] ? tx.inst['投信'].net : null;
+        fut.push({k:'外資大台淨OI(口)', v:'<span class="'+cls(fr)+'">'+sign(fr)+'</span>',
           sub:'臺股期貨'});
-      }
-      for(const code of ['MTX','TMF']){
-        const r = (futures.history[code]||[]).slice(-1)[0];
-        if(r) fut.push({k:PROD[code]+'散戶多空比',
-          v:'<span class="'+cls(r.retail.ratio)+'">'+
-            (r.retail.ratio>0?'+':'')+r.retail.ratio+'%</span>',
-          sub:'淨部位 '+sign(r.retail.net)+' 口'});
+        fut.push({k:'投信大台淨OI(口)', v:'<span class="'+cls(it)+'">'+sign(it)+'</span>',
+          sub:'臺股期貨'});
       }
     }
     if(options && options.months && options.months.length){
@@ -344,6 +389,21 @@
         v:'<span class="tag-call">'+fmt(m.call_max.strike)+'</span> / '+
           '<span class="tag-put">'+fmt(m.put_max.strike)+'</span>',
         sub:m.month+' '+tag});
+    }
+    if(futures && futures.history){
+      for(const code of ['MTX','TMF']){
+        const r = (futures.history[code]||[]).slice(-1)[0];
+        if(r) fut.push({k:PROD[code]+'散戶多空比',
+          v:'<span class="'+cls(r.retail.ratio)+'">'+
+            (r.retail.ratio>0?'+':'')+r.retail.ratio+'%</span>',
+          sub:'淨部位 '+sign(r.retail.net)+' 口'});
+      }
+    }
+    if(options && options.pc_ratio && options.pc_ratio.value!=null){
+      fut.push({k:'臺指選擇權 P/C 比', v:options.pc_ratio.value,
+        sub:'買賣權未平倉量比率%'});
+    } else {
+      fut.push({k:'臺指選擇權 P/C 比', v:'--', sub:'買賣權未平倉量比率%'});
     }
     renderCells('board-futures', fut);
 
@@ -356,7 +416,7 @@
     if(!margin || !margin.rows || !margin.rows.length){
       emptyCard(el1); emptyCard(document.getElementById('chart-ratio')); return;
     }
-    const rows = margin.rows.slice(-30);
+    const rows = margin.rows.slice(-60);
     const dates = rows.map(r=>r.date);
 
     mkChart('chart-margin').setOption(Object.assign({}, baseOpt, {
@@ -394,7 +454,7 @@
     let cur = 'TX';
 
     function render(){
-      const rows = (futures.history[cur]||[]).slice(-30);
+      const rows = (futures.history[cur]||[]).slice(-60);
       const dates = rows.map(r=>r.date);
       const get = role => rows.map(r=> r.inst[role] ? r.inst[role].net : null);
       const last = rows[rows.length-1];
@@ -406,20 +466,22 @@
                  '<div class="v '+cls(v)+'">'+sign(v)+'</div></div>';
         }).join('') : '';
 
-      const barSeries = (name,color)=>({name, type:'bar', data:get(name),
-        itemStyle:{color}, barMaxWidth:16});
+      const lineSeries = (name,color)=>({name, type:'line', data:get(name),
+        lineStyle:{color,width:2}, itemStyle:{color}, symbol:'circle', symbolSize:3,
+        smooth:false});
       chart.setOption(Object.assign({}, baseOpt, {
         legend:Object.assign({},baseOpt.legend,{data:['外資','投信']}),
         dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
           borderColor:'#2e3340', backgroundColor:'#1c1f26',
           fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'},
-          startValue:dates.length>15?dates.length-15:0}],
+          startValue:dates.length>30?dates.length-30:0}],
         grid:{left:8,right:8,top:36,bottom:30,containLabel:true},
+        tooltip:Object.assign({},baseOpt.tooltip,{}),
         xAxis:axisX(dates),
         yAxis:[axisY({name:'淨OI(口)'})],
         series:[
-          barSeries('外資','#e8b04b'),
-          barSeries('投信','#5b8def'),
+          lineSeries('外資','#e8b04b'),
+          lineSeries('投信','#5b8def'),
         ],
       }), true);
     }
@@ -446,7 +508,7 @@
     let cur = 'TX';
 
     function render(){
-      const rows = (futures.history[cur]||[]).slice(-30);
+      const rows = (futures.history[cur]||[]).slice(-60);
       const dates = rows.map(r=>r.date);
       const vals = rows.map(r=>r.retail.ratio);
       const last = rows[rows.length-1];

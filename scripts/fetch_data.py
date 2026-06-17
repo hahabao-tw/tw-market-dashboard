@@ -378,12 +378,62 @@ def update_options():
         })
 
     log(f"選擇權合約({len(selected)}): {selected}")
+
+    # 附帶抓取 P/C 比(買賣權未平倉量比率)
+    pc = fetch_pc_ratio()
+
     save_json("options.json", {
         "updated": NOW.strftime("%Y-%m-%d %H:%M"),
         "date": latest,
         "months": months,
+        "pc_ratio": pc,   # {"date":..., "value":...} 或 None
     })
     return True
+
+
+def fetch_pc_ratio():
+    """臺指選擇權 Put/Call 比。取最新一筆「買賣權未平倉量比率%」。
+    來源 CSV 欄位:日期,賣權成交量,買權成交量,買賣權成交量比率%,
+                  賣權未平倉量,買權未平倉量,買賣權未平倉量比率%"""
+    end = NOW.date()
+    start = end - timedelta(days=10)
+    try:
+        raw = http_post("https://www.taifex.com.tw/cht/3/pcRatioDown", {
+            "queryStartDate": start.strftime("%Y/%m/%d"),
+            "queryEndDate": end.strftime("%Y/%m/%d"),
+        }, referer="https://www.taifex.com.tw/cht/3/pcRatio")
+        rows = decode_csv(raw)
+    except Exception as e:
+        log(f"P/C 比抓取失敗: {e}")
+        return None
+    if not rows or len(rows) < 2:
+        log("P/C 比無資料")
+        return None
+    header = rows[0]
+    if header and "<" in header[0]:
+        log(f"P/C 比回傳非 CSV(前80字): {raw[:80]}")
+        return None
+    i_date = col_index(header, "日期")
+    i_oiratio = col_index(header, "買賣權未平倉量比率") or col_index(header, "未平倉量比率")
+    if i_date is None or i_oiratio is None:
+        log(f"P/C 比表頭不符: {header}")
+        return None
+    # 取最後一筆有效資料(資料通常由新到舊或舊到新,挑日期最大者)
+    best = None
+    for r in rows[1:]:
+        if len(r) <= i_oiratio:
+            continue
+        d = r[i_date].strip().replace("/", "-")
+        v = num(r[i_oiratio])
+        if v is None:
+            continue
+        if best is None or d > best[0]:
+            best = (d, v)
+    if not best:
+        log("P/C 比解析後無資料")
+        return None
+    log(f"P/C 比最新: {best[0]} = {best[1]}")
+    return {"date": best[0], "value": best[1]}
 
 
 # ---------- 3. 證交所:融資餘額 / 成交量 / 融資比例 ----------
