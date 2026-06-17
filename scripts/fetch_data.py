@@ -352,22 +352,12 @@ def update_options():
         e = day[mc]["expiry"]
         return e if e else mc   # 沒有到期日欄位時退而用合約代碼排序
 
-    # 近月月選:月選中到期日 >= 資料日的最近一個
-    monthlies = [mc for mc in day if day[mc]["kind"] == "monthly"
-                 and (not day[mc]["expiry"] or day[mc]["expiry"] >= latest)]
-    monthlies.sort(key=expiry_key)
-    near_monthly = monthlies[0] if monthlies else None
-
-    # 下一個結算週選:週選中到期日「嚴格大於」資料日的最近一個
-    #   (到期日 == 資料日 的當天結算合約要排除,例如範例中的 202606F2)
-    weeklies = [mc for mc in day if day[mc]["kind"] == "weekly"
-                and day[mc]["expiry"] and day[mc]["expiry"] > latest]
-    weeklies.sort(key=expiry_key)
-    next_weekly = weeklies[0] if weeklies else None
-
-    selected = [mc for mc in (near_monthly, next_weekly) if mc]
+    # 全部合約:月選 + 週選,保留到期日 >= 資料日(尚未結算)者,依到期日排序
+    selected = [mc for mc in day
+                if (not day[mc]["expiry"] or day[mc]["expiry"] >= latest)]
+    selected.sort(key=expiry_key)
     if not selected:
-        log("選擇權找不到符合條件的合約")
+        log("選擇權找不到合約")
         return False
 
     months = []
@@ -387,7 +377,7 @@ def update_options():
             "chain": [{"k": k, "c": chain[k]["c"], "p": chain[k]["p"]} for k in strikes],
         })
 
-    log(f"選擇權選定合約: {selected}")
+    log(f"選擇權合約({len(selected)}): {selected}")
     save_json("options.json", {
         "updated": NOW.strftime("%Y-%m-%d %H:%M"),
         "date": latest,
@@ -546,6 +536,137 @@ def update_margin():
     return changed
 
 
+# ---------- 4. 加權指數 + 台積電 + 大盤影響點數 ----------
+def fetch_taiex_close_map(months):
+    """發行量加權股價指數歷史(整月每日收盤)。回傳 {ISO日期: 收盤指數}。"""
+    out = {}
+    for ym in months:
+        url = (f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST"
+               f"?response=json&date={ym}01")
+        try:
+            j = twse_json(url)
+        except Exception as e:
+            log(f"加權指數 {ym} 失敗: {e}")
+            continue
+        # 欄位通常為 [日期, 開盤, 最高, 最低, 收盤],日期為民國年 115/06/16
+        for row in (j.get("data") or []):
+            if len(row) < 5:
+                continue
+            try:
+                y, m, d = row[0].split("/")
+                iso = f"{int(y)+1911}-{int(m):02d}-{int(d):02d}"
+            except (ValueError, AttributeError):
+                continue
+            close = num(row[4])
+            if close is not None:
+                out[iso] = close
+        time.sleep(3)
+    return out
+
+
+def fetch_tsmc_close_map(months):
+    """台積電(2330)每日收盤。回傳 {ISO日期: 收盤價}。"""
+    out = {}
+    for ym in months:
+        url = (f"https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+               f"?response=json&stockNo=2330&date={ym}01")
+        try:
+            j = twse_json(url)
+        except Exception as e:
+            log(f"台積電股價 {ym} 失敗: {e}")
+            continue
+        # 欄位: 日期,成交股數,成交金額,開盤,最高,最低,收盤,漲跌價差,成交筆數
+        for row in (j.get("data") or []):
+            if len(row) < 7:
+                continue
+            try:
+                y, m, d = row[0].split("/")
+                iso = f"{int(y)+1911}-{int(m):02d}-{int(d):02d}"
+            except (ValueError, AttributeError):
+                continue
+            close = num(row[6])
+            if close is not None:
+                out[iso] = close
+        time.sleep(3)
+    return out
+
+
+def fetch_tsmc_weight():
+    """台積電佔大盤權重(%)。來源:期交所成分股權重頁(每月底更新)。
+    回傳 (權重float, 資料日期str) 或 (None, '')。"""
+    url = "https://www.taifex.com.tw/cht/2/weightedPropertion"
+    try:
+        raw = http_get(url)
+        html = raw.decode("utf-8", "ignore")
+    except Exception as e:
+        log(f"台積電權重抓取失敗: {e}")
+        return None, ""
+    import re
+    # 找 2330 之後最近的百分比(台積電排第1,2330 後接「台積電」再接 41.992%)
+    m = re.search(r"2330.{0,40}?([0-9]+\.[0-9]+)\s*%", html, re.S)
+    weight = float(m.group(1)) if m else None
+    # 資料日期
+    dm = re.search(r"資料日期[:：]\s*([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})", html)
+    wdate = dm.group(1).replace("/", "-") if dm else ""
+    if weight is None:
+        log("台積電權重未解析到,頁面結構可能改變")
+    else:
+        log(f"台積電權重: {weight}% (資料日 {wdate})")
+    return weight, wdate
+
+
+def update_taiex_tsmc():
+    """組合加權指數收盤+漲跌幅、台積電收盤、權重,算大盤影響點數係數。"""
+    data = load_json("taiex.json", {"updated": "", "date": ""})
+    if data.get("date") == TODAY:
+        log("加權指數/台積電今日已更新,跳過")
+        return False
+
+    end = NOW.date()
+    # 抓當月;若需前一日算漲跌幅而當月不足,補上月
+    this_ym = end.strftime("%Y%m")
+    prev_ym = (end.replace(day=1) - timedelta(days=1)).strftime("%Y%m")
+    months = [prev_ym, this_ym]
+
+    taiex = fetch_taiex_close_map(months)
+    if not taiex:
+        log("加權指數無資料(可能假日)")
+        return False
+    tsmc = fetch_tsmc_close_map(months)
+    if not tsmc:
+        log("台積電股價無資料")
+        return False
+
+    latest = max(taiex.keys())
+    if latest == data.get("date") and not FORCE:
+        log("加權指數最新資料與現有相同,跳過")
+        return False
+
+    # 漲跌幅:用前一交易日收盤自算
+    dates_sorted = sorted(taiex.keys())
+    idx = dates_sorted.index(latest)
+    prev_close = taiex[dates_sorted[idx-1]] if idx > 0 else None
+    taiex_close = taiex[latest]
+    change_pct = round((taiex_close - prev_close) / prev_close * 100, 2) if prev_close else None
+
+    tsmc_close = tsmc.get(latest)
+    weight, wdate = fetch_tsmc_weight()
+
+    impact = None
+    if tsmc_close and weight:
+        # 影響點數係數 = 加權指數收盤 × 權重% ÷ 台積電收盤
+        impact = round(taiex_close * (weight / 100) / tsmc_close, 3)
+
+    save_json("taiex.json", {
+        "updated": NOW.strftime("%Y-%m-%d %H:%M"),
+        "date": latest,
+        "taiex": {"close": taiex_close, "change_pct": change_pct},
+        "tsmc": {"close": tsmc_close, "weight": weight, "weight_date": wdate},
+        "impact": impact,
+    })
+    return True
+
+
 # ---------- 主流程 ----------
 def main():
     if NOW.weekday() >= 5 and not FORCE:
@@ -555,7 +676,8 @@ def main():
     results = {}
     for name, fn in (("期貨/散戶多空比", update_futures),
                      ("選擇權最大OI", update_options),
-                     ("融資/成交量", update_margin)):
+                     ("融資/成交量", update_margin),
+                     ("加權指數/台積電影響", update_taiex_tsmc)):
         try:
             results[name] = fn()
         except Exception as e:

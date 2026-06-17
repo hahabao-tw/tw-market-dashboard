@@ -75,6 +75,7 @@
     padding:12px 16px 5px;background:var(--surface);text-transform:uppercase;
   }
   @media(min-width:720px){.board-grid{grid-template-columns:repeat(3,1fr)}}
+  @media(min-width:720px){.board-grid-3{grid-template-columns:repeat(3,1fr)}}
   .cell{background:var(--surface);padding:12px 16px;min-height:74px}
   .cell .k{font-size:.74rem;color:var(--dim);letter-spacing:.05em}
   .cell .v{font-family:var(--mono);font-size:1.25rem;font-weight:600;
@@ -150,7 +151,7 @@
       <span class="stamp" id="board-stamp">--</span>
     </div>
     <div class="board-section-label">股票市場</div>
-    <div class="board-grid" id="board-stock"></div>
+    <div class="board-grid board-grid-3" id="board-stock"></div>
     <div class="board-section-label">期貨市場</div>
     <div class="board-grid" id="board-futures"></div>
   </div>
@@ -185,9 +186,10 @@
   <section id="retail">
     <div class="sec-head">
       <h2>散戶多空比</h2>
-      <span class="note">近 30 日|(散戶多單−散戶空單)÷ 全市場未平倉 ×100%</span>
+      <span class="note">近 30 日|正值(紅)偏多、負值(綠)偏空</span>
     </div>
     <div class="card">
+      <div class="seg" id="seg-retail"></div>
       <div class="stats" id="stats-retail"></div>
       <div id="chart-retail" class="chart"></div>
     </div>
@@ -260,10 +262,11 @@
   window.addEventListener('resize', ()=>charts.forEach(c=>c.resize()));
 
   // ───────────────── 載入三份資料 ─────────────────
-  const [margin, futures, options] = await Promise.all([
+  const [margin, futures, options, taiex] = await Promise.all([
     loadJSON('data/margin.json'),
     loadJSON('data/futures.json'),
     loadJSON('data/options.json'),
+    loadJSON('data/taiex.json'),
   ]);
 
   // ───────────────── 盤後快照 ─────────────────
@@ -285,14 +288,34 @@
     let stamp = [];
 
     // ── 股票市場 ──
-    if(margin && margin.rows && margin.rows.length){
-      const last = margin.rows[margin.rows.length-1];
-      stamp.push('股市 '+last.date);
-      stock.push({k:'上市總市值(億)', v:fmt(last.mktcap), sub:'集中市場'});
-      stock.push({k:'融資餘額(億)', v:fmt(last.balance),
-        sub:'增減 <span class="'+cls(last.change)+'">'+sign(last.change)+'</span>'});
-      stock.push({k:'大盤成交金額(億)', v:fmt(last.turnover), sub:'集中市場'});
-      stock.push({k:'融資槓桿比', v:(last.leverage==null?'--':last.leverage+'%'),
+    // 第1行:加權指數收盤+漲跌幅、大盤成交金額、台積電大盤影響點數
+    // 第2行:上市總市值、融資餘額、融資槓桿比
+    const mlast = (margin && margin.rows && margin.rows.length)
+      ? margin.rows[margin.rows.length-1] : null;
+    if(taiex && taiex.date){
+      stamp.push('股市 '+taiex.date);
+      const cp = taiex.taiex.change_pct;
+      const cpStr = cp==null ? '' :
+        '<span class="'+cls(cp)+'">'+(cp>0?'+':'')+cp+'%</span>';
+      stock.push({k:'加權指數收盤', v:fmt(taiex.taiex.close), sub:cpStr||'—'});
+    } else if(mlast){
+      stamp.push('股市 '+mlast.date);
+      stock.push({k:'加權指數收盤', v:'--', sub:'待 20:00 更新'});
+    }
+    if(mlast){
+      stock.push({k:'大盤成交金額(億)', v:fmt(mlast.turnover), sub:'集中市場'});
+    }
+    if(taiex && taiex.impact!=null){
+      stock.push({k:'台積電大盤影響點數', v:taiex.impact,
+        sub:'台積電每跳 1 元 ≈ '+taiex.impact+' 點'});
+    } else {
+      stock.push({k:'台積電大盤影響點數', v:'--', sub:'待 20:00 更新'});
+    }
+    if(mlast){
+      stock.push({k:'上市總市值(億)', v:fmt(mlast.mktcap), sub:'集中市場'});
+      stock.push({k:'融資餘額(億)', v:fmt(mlast.balance),
+        sub:'增減 <span class="'+cls(mlast.change)+'">'+sign(mlast.change)+'</span>'});
+      stock.push({k:'融資槓桿比', v:(mlast.leverage==null?'--':mlast.leverage+'%'),
         sub:'融資餘額 ÷ 總市值'});
     }
     renderCells('board-stock', stock);
@@ -350,15 +373,12 @@
     }));
 
     mkChart('chart-ratio').setOption(Object.assign({}, baseOpt, {
-      legend:Object.assign({},baseOpt.legend,{data:['成交金額','融資槓桿比']}),
+      legend:Object.assign({},baseOpt.legend,{data:['成交金額']}),
       xAxis:axisX(dates),
-      yAxis:[axisY({name:'億元'}), axisY({name:'%',splitLine:{show:false}})],
+      yAxis:[axisY({name:'億元'})],
       series:[
         {name:'成交金額', type:'bar', data:rows.map(r=>r.turnover),
          itemStyle:{color:'#3a4154'}, barWidth:'55%'},
-        {name:'融資槓桿比', type:'line', yAxisIndex:1, data:rows.map(r=>r.leverage),
-         lineStyle:{color:'#5b8def',width:2}, itemStyle:{color:'#5b8def'},
-         symbol:'circle', symbolSize:4},
       ],
     }));
   })();
@@ -380,16 +400,16 @@
       const last = rows[rows.length-1];
 
       document.getElementById('stats-inst').innerHTML = last ?
-        ['外資','投信','自營商'].map(role=>{
+        ['外資','投信'].map(role=>{
           const v = last.inst[role] ? last.inst[role].net : null;
           return '<div class="stat"><div class="k">'+role+' 淨OI(口)</div>'+
                  '<div class="v '+cls(v)+'">'+sign(v)+'</div></div>';
         }).join('') : '';
 
       const barSeries = (name,color)=>({name, type:'bar', data:get(name),
-        itemStyle:{color}, barMaxWidth:14});
+        itemStyle:{color}, barMaxWidth:16});
       chart.setOption(Object.assign({}, baseOpt, {
-        legend:Object.assign({},baseOpt.legend,{data:['外資','投信','自營商']}),
+        legend:Object.assign({},baseOpt.legend,{data:['外資','投信']}),
         dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
           borderColor:'#2e3340', backgroundColor:'#1c1f26',
           fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'},
@@ -400,7 +420,6 @@
         series:[
           barSeries('外資','#e8b04b'),
           barSeries('投信','#5b8def'),
-          barSeries('自營商','#b78ce0'),
         ],
       }), true);
     }
@@ -416,49 +435,58 @@
     render();
   })();
 
-  // ───────────────── 3. 散戶多空比(橫向分組柱形圖) ─────────────────
+  // ───────────────── 3. 散戶多空比(單商品切換,直立紅綠柱) ─────────────────
   (function secRetail(){
     const el = document.getElementById('chart-retail');
     if(!futures || !futures.history || !(futures.history.TX||[]).length){
       emptyCard(el); return;
     }
-    const colors = {TX:'#e8e6e1', MTX:'#e8b04b', TMF:'#5b8def'};
-    const series = [], legends = [];
-    let dates = [];
-    Object.keys(PROD).forEach(code=>{
-      const rows = (futures.history[code]||[]).slice(-30);
-      if(rows.length > dates.length) dates = rows.map(r=>r.date);
-    });
-    document.getElementById('stats-retail').innerHTML =
-      Object.keys(PROD).map(code=>{
-        const rows = (futures.history[code]||[]).slice(-30);
-        legends.push(PROD[code]);
-        // 對齊日期軸:用 date → ratio 映射
-        const map = {}; rows.forEach(r=>map[r.date]=r.retail.ratio);
-        series.push({name:PROD[code], type:'bar',
-          data:dates.map(d=> d in map ? map[d] : null),
-          itemStyle:{color:colors[code]}, barMaxWidth:7});
-        const last = rows[rows.length-1];
-        const v = last ? last.retail.ratio : null;
-        return '<div class="stat"><div class="k">'+PROD[code]+'(今日)</div>'+
-               '<div class="v '+cls(v)+'">'+(v==null?'--':(v>0?'+':'')+v+'%')+'</div></div>';
-      }).join('');
+    const seg = document.getElementById('seg-retail');
+    const chart = mkChart('chart-retail');
+    let cur = 'TX';
 
-    // 橫向:類目軸放 y(日期),數值軸放 x(%)。30 天較高,容器加高 + 內部捲動
-    el.style.height = '620px';
-    mkChart('chart-retail').setOption(Object.assign({}, baseOpt, {
-      legend:Object.assign({},baseOpt.legend,{data:legends}),
-      grid:{left:8,right:14,top:36,bottom:8,containLabel:true},
-      tooltip:Object.assign({},baseOpt.tooltip,{
-        axisPointer:{type:'shadow'}}),
-      xAxis:[axisY({name:'多空比 %', splitLine:{lineStyle:{color:'#23262e'}}})],
-      yAxis:{type:'category', data:dates, inverse:true,
-        axisLine:{lineStyle:{color:'#2e3340'}},
-        axisLabel:{fontSize:10,color:'#8b8f9a',formatter:v=>v.slice(5)}},
-      series:series.map((s,i)=> i===0 ? Object.assign(s,{markLine:{
-        symbol:'none', label:{show:false},
-        lineStyle:{color:'#555c6e',type:'dashed'}, data:[{xAxis:0}]}}) : s),
-    }));
+    function render(){
+      const rows = (futures.history[cur]||[]).slice(-30);
+      const dates = rows.map(r=>r.date);
+      const vals = rows.map(r=>r.retail.ratio);
+      const last = rows[rows.length-1];
+
+      document.getElementById('stats-retail').innerHTML = last ?
+        ('<div class="stat"><div class="k">'+PROD[cur]+' 今日多空比</div>'+
+         '<div class="v '+cls(last.retail.ratio)+'">'+
+         (last.retail.ratio>0?'+':'')+last.retail.ratio+'%</div></div>'+
+         '<div class="stat"><div class="k">散戶淨部位(口)</div>'+
+         '<div class="v '+cls(last.retail.net)+'">'+sign(last.retail.net)+'</div></div>') : '';
+
+      chart.setOption(Object.assign({}, baseOpt, {
+        legend:{show:false},
+        dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
+          borderColor:'#2e3340', backgroundColor:'#1c1f26',
+          fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'},
+          startValue:dates.length>20?dates.length-20:0}],
+        grid:{left:8,right:8,top:20,bottom:30,containLabel:true},
+        tooltip:Object.assign({},baseOpt.tooltip,{
+          formatter:p=>{const d=p[0];return d.name+'<br/>多空比: '+d.value+'%';}}),
+        xAxis:axisX(dates),
+        yAxis:[axisY({name:'%'})],
+        series:[{
+          name:'散戶多空比', type:'bar', data:vals, barMaxWidth:18,
+          itemStyle:{color:p=>p.value>=0?'#ff5d5d':'#2fbf71'},
+          markLine:{symbol:'none', label:{show:false},
+            lineStyle:{color:'#555c6e',type:'dashed'}, data:[{yAxis:0}]},
+        }],
+      }), true);
+    }
+
+    seg.innerHTML = Object.keys(PROD).map(c=>
+      '<button data-c="'+c+'" class="'+(c==='TX'?'on':'')+'">'+PROD[c]+'</button>').join('');
+    seg.addEventListener('click', e=>{
+      const b = e.target.closest('button'); if(!b) return;
+      cur = b.dataset.c;
+      seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on', x===b));
+      render();
+    });
+    render();
   })();
 
   // ───────────────── 4. 選擇權最大OI ─────────────────
@@ -483,22 +511,33 @@
         '<div class="v">'+fmt(m.put_max.strike)+'</div>'+
         '<div class="k">'+fmt(m.put_max.oi)+' 口</div></div>';
 
-      // 只畫有量的履約價區間,圖才不會被拉太寬
+      // 只畫有量的履約價;履約價放 Y 軸(由小到大),Call 往左(負)、Put 往右(正)
       const chain = m.chain.filter(r => r.c>0 || r.p>0);
+      const strikes = chain.map(r=>r.k);
+      // 履約價多時容器加高,方便縱向閱讀
+      el.style.height = Math.max(360, Math.min(strikes.length*22+80, 900)) + 'px';
       chart.setOption(Object.assign({}, baseOpt, {
         legend:Object.assign({},baseOpt.legend,{data:['Call OI','Put OI']}),
-        dataZoom:[{type:'inside'},{type:'slider',height:14,bottom:0,
-          borderColor:'#2e3340', backgroundColor:'#1c1f26',
-          fillerColor:'rgba(232,176,75,.15)', handleStyle:{color:'#e8b04b'}}],
-        grid:{left:8,right:8,top:36,bottom:30,containLabel:true},
-        xAxis:{type:'category', data:chain.map(r=>r.k),
+        grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
+        tooltip:Object.assign({},baseOpt.tooltip,{axisPointer:{type:'shadow'},
+          formatter:p=>{
+            let s = p[0].name+'<br/>';
+            p.forEach(d=>{ s += d.seriesName+': '+fmt(Math.abs(d.value))+' 口<br/>'; });
+            return s;
+          }}),
+        xAxis:{type:'value', name:'未沖銷契約量(口)',
+          axisLine:{lineStyle:{color:'#2e3340'}},
+          axisLabel:{fontSize:10,color:'#8b8f9a',formatter:v=>fmt(Math.abs(v))},
+          splitLine:{lineStyle:{color:'#23262e'}}},
+        yAxis:{type:'category', data:strikes,
           axisLine:{lineStyle:{color:'#2e3340'}},
           axisLabel:{fontSize:10,color:'#8b8f9a'}},
-        yAxis:[axisY({name:'口'})],
         series:[
-          {name:'Call OI', type:'bar', data:chain.map(r=>r.c),
-           itemStyle:{color:'#5b8def'}, barGap:'10%'},
-          {name:'Put OI', type:'bar', data:chain.map(r=>r.p),
+          {name:'Call OI', type:'bar', stack:'oi',
+           data:chain.map(r=>-r.c),                 // 負值往左
+           itemStyle:{color:'#5b8def'}},
+          {name:'Put OI', type:'bar', stack:'oi',
+           data:chain.map(r=>r.p),                  // 正值往右
            itemStyle:{color:'#e8b04b'}},
         ],
       }), true);
