@@ -29,7 +29,7 @@
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
   body{
     background:var(--bg);color:var(--ink);
-    font-family:'Noto Sans TC',sans-serif;font-size:15px;line-height:1.6;
+    font-family:'Noto Sans TC',sans-serif;font-size:15px;line-height:1.45;
     -webkit-font-smoothing:antialiased;
   }
   .wrap{max-width:1080px;margin:0 auto;padding:0 14px 80px}
@@ -39,13 +39,24 @@
     position:sticky;top:0;z-index:50;background:rgba(20,22,26,.92);
     backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
   }
+  .top-inner{position:relative}
   .top-inner{max-width:1080px;margin:0 auto;padding:10px 14px;
-    display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+    display:flex;align-items:center;gap:14px}
   .brand{font-family:'Noto Serif TC',serif;font-weight:900;font-size:1.15rem;
-    letter-spacing:.06em;white-space:nowrap}
+    letter-spacing:.06em;white-space:nowrap;flex:1}
   .brand b{color:var(--amber)}
-  nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;flex:1}
-  nav::-webkit-scrollbar{display:none}
+
+  /* 漢堡按鈕:桌機隱藏,手機顯示 */
+  .hamburger{display:none;flex-direction:column;justify-content:center;gap:4px;
+    width:34px;height:34px;background:var(--surface2);border:1px solid var(--line);
+    border-radius:8px;cursor:pointer;padding:0 8px;flex-shrink:0}
+  .hamburger span{display:block;height:2px;width:100%;background:var(--dim);
+    border-radius:2px;transition:.25s}
+  .hamburger[aria-expanded="true"] span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+  .hamburger[aria-expanded="true"] span:nth-child(2){opacity:0}
+  .hamburger[aria-expanded="true"] span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+
+  nav{display:flex;gap:4px;flex:1}
   nav a{
     color:var(--dim);text-decoration:none;font-size:.85rem;white-space:nowrap;
     padding:5px 11px;border-radius:999px;border:1px solid transparent;
@@ -61,6 +72,24 @@
   }
   .fontctl button:hover{color:var(--amber);border-color:var(--amber)}
   .fontctl button:active{background:var(--amber);color:#14161a}
+
+  /* 手機:漢堡選單,nav 變成下拉面板 */
+  @media(max-width:680px){
+    .hamburger{display:flex}
+    .brand{font-size:1.05rem}
+    nav{
+      position:absolute;top:100%;left:0;right:0;flex-direction:column;gap:2px;
+      background:var(--surface);border-bottom:1px solid var(--line);
+      padding:8px 14px;flex:none;
+      max-height:0;overflow:hidden;opacity:0;
+      transition:max-height .28s ease,opacity .2s ease,padding .28s ease;
+      padding-top:0;padding-bottom:0;
+    }
+    nav.open{max-height:60vh;opacity:1;padding-top:8px;padding-bottom:8px}
+    nav a{padding:11px 12px;font-size:.95rem;border-bottom:1px solid var(--line);
+      border-radius:0}
+    nav a:last-child{border-bottom:none}
+  }
 
   /* 兩個市場快照各自獨立成卡片,明確切開 */
   .board-block{
@@ -138,6 +167,19 @@
   .pk .stat .v{font-size:1.2rem}
   .tag-call{color:var(--call)} .tag-put{color:var(--put)}
 
+  /* 折疊式 */
+  .collapse-btn{
+    width:100%;background:var(--surface2);border:1px solid var(--line);
+    color:var(--dim);font:inherit;font-size:.85rem;cursor:pointer;
+    padding:9px 14px;border-radius:9px;display:flex;align-items:center;
+    justify-content:center;gap:8px;
+  }
+  .collapse-btn:hover{color:var(--amber);border-color:var(--amber)}
+  .collapse-btn i{font-style:normal;transition:transform .25s}
+  .collapse-btn[aria-expanded="true"] i{transform:rotate(180deg)}
+  .collapse-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+  .collapse-body.open{max-height:1100px;margin-top:12px}
+
   footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;
     font-size:.76rem;color:var(--dim);line-height:1.9}
 </style>
@@ -147,7 +189,10 @@
 <header class="top">
   <div class="top-inner">
     <div class="brand">台股<b>籌碼</b>日報</div>
-    <nav>
+    <button class="hamburger" id="hamburger" aria-label="選單" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <nav id="nav">
       <a href="#margin">融資・量能</a>
       <a href="#inst">三大法人</a>
       <a href="#retail">散戶多空比</a>
@@ -228,7 +273,12 @@
     <div class="card">
       <div class="chips" id="opt-chips"></div>
       <div class="pk" id="opt-pk"></div>
-      <div id="chart-opt" class="chart"></div>
+      <button class="collapse-btn" id="opt-toggle" aria-expanded="false">
+        <span>展開未平倉分布圖</span><i>▾</i>
+      </button>
+      <div class="collapse-body" id="opt-collapse">
+        <div id="chart-opt" class="chart"></div>
+      </div>
     </div>
   </section>
 
@@ -301,7 +351,7 @@
     const ctl = document.getElementById('fontctl');
     if(!ctl) return;
     const MIN=0.8, MAX=1.6, STEP=0.1;
-    let scale = 1.1;   // 預設字級提高一級
+    let scale = 0.9;   // 預設字級(降2級)
     try{ const s=parseFloat(localStorage.getItem('fontScale')); if(s) scale=s; }catch(e){}
     function apply(){
       scale = Math.min(MAX, Math.max(MIN, Math.round(scale*10)/10));
@@ -314,10 +364,26 @@
       const a=b.dataset.act;
       if(a==='inc') scale+=STEP;
       else if(a==='dec') scale-=STEP;
-      else scale=1.1;   // 恢復預設(已提高一級)
+      else scale=0.9;   // 恢復預設
       apply();
     });
-    if(scale!==1.1) apply(); else apply();
+    apply();
+  })();
+
+  // ── 漢堡選單(手機) ──
+  (function hamburger(){
+    const btn = document.getElementById('hamburger');
+    const nav = document.getElementById('nav');
+    if(!btn || !nav) return;
+    function close(){ nav.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
+    btn.addEventListener('click', ()=>{
+      const open = nav.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    nav.querySelectorAll('a').forEach(a=>a.addEventListener('click', close));
+    document.addEventListener('click', e=>{
+      if(!nav.contains(e.target) && !btn.contains(e.target)) close();
+    });
   })();
 
   // ───────────────── 載入三份資料 ─────────────────
@@ -630,6 +696,17 @@
       render();
     });
     render();
+
+    // 折疊開關:ECharts 在容器高度為 0 時無法正確繪製,展開後需 resize
+    const toggle = document.getElementById('opt-toggle');
+    const body = document.getElementById('opt-collapse');
+    const label = toggle.querySelector('span');
+    toggle.addEventListener('click', ()=>{
+      const open = body.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      label.textContent = open ? '收合未平倉分布圖' : '展開未平倉分布圖';
+      if(open) setTimeout(()=>chart.resize(), 320);
+    });
   })();
 
   // ───────────────── 5. 每日前十大交易量股票期貨(柏拉圖) ─────────────────
