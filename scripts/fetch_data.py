@@ -652,14 +652,22 @@ def fetch_tsmc_weight():
         log(f"台積電權重抓取失敗: {e}")
         return None, ""
     import re
-    # 找 2330 之後最近的百分比(台積電排第1,2330 後接「台積電」再接 41.992%)
-    m = re.search(r"2330.{0,40}?([0-9]+\.[0-9]+)\s*%", html, re.S)
-    weight = float(m.group(1)) if m else None
-    # 資料日期
-    dm = re.search(r"資料日期[:：]\s*([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})", html)
+    # 先去除 HTML 標籤並壓縮空白,讓 2330/台積電 與百分比之間不再隔著標籤
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text)
+    # 優先用「2330 台積電 41.992%」定位,失敗再退而用「台積電 41.992%」
+    weight = None
+    for pat in (r"2330\s*台積電\s*([0-9]+\.[0-9]+)\s*%",
+                r"台積電\s*([0-9]+\.[0-9]+)\s*%",
+                r"2330\D{0,30}?([0-9]+\.[0-9]+)\s*%"):
+        m = re.search(pat, text)
+        if m:
+            weight = float(m.group(1))
+            break
+    dm = re.search(r"資料日期[:：]\s*([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})", text)
     wdate = dm.group(1).replace("/", "-") if dm else ""
     if weight is None:
-        log("台積電權重未解析到,頁面結構可能改變")
+        log(f"台積電權重未解析到,頁面前200字: {text[:200]}")
     else:
         log(f"台積電權重: {weight}% (資料日 {wdate})")
     return weight, wdate
