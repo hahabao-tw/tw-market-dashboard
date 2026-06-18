@@ -80,6 +80,22 @@ def http_post(url, params, timeout=60, referer=None):
         return r.read()
 
 
+def http_post_json(url, obj, timeout=60, referer=None):
+    """送 JSON body 的 POST(期交所活動專區 API 用)。"""
+    data = json.dumps(obj).encode("utf-8")
+    headers = {
+        "User-Agent": UA,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+    }
+    if referer:
+        headers["Referer"] = referer
+        headers["Origin"] = "https://www.taifex.com.tw"
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
 def decode_csv(raw):
     """期交所 CSV 可能是 Big5 或 UTF-8,逐一嘗試。"""
     for enc in ("utf-8-sig", "big5", "cp950", "utf-8"):
@@ -741,6 +757,67 @@ def update_taiex_tsmc():
     return True
 
 
+# ---------- 5. 前十大交易量股票期貨(柏拉圖) ----------
+def update_top10_ssf():
+    """每日前十大交易量股票期貨。來源:期交所期貨交易資訊觀測站 API。
+    回傳資料含商品名稱、成交量、個別佔比;前端再累加成累加佔比折線。"""
+    data = load_json("top10ssf.json", {"updated": "", "date": "", "items": []})
+
+    # API 的 date 用最近交易日;先試今天,假日/未公布則往前找
+    for back in range(0, 6):
+        d = (NOW - timedelta(days=back)).date()
+        if d.weekday() >= 5:
+            continue
+        ds = d.strftime("%Y/%m/%d")
+        try:
+            raw = http_post_json(
+                "https://www.taifex.com.tw/eventTaifexTradingCenter/api/ssf/topTenSSFVolume",
+                {"date": ds, "showType": False, "lang": "cht", "initFlag": "true"},
+                referer="https://www.taifex.com.tw/eventTaifexTradingCenter/cht/ssf.do")
+            obj = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            log(f"前十大股票期貨 {ds} 失敗: {e}")
+            continue
+
+        inner = obj.get("data")
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)   # data 是字串包著的陣列
+            except Exception:
+                inner = None
+        if not inner:
+            continue   # 該日無資料,往前一天再試
+
+        iso = d.strftime("%Y-%m-%d")
+        if iso == data.get("date") and not FORCE:
+            log("前十大股票期貨今日已更新,跳過")
+            return False
+
+        items, cum = [], 0.0
+        for row in inner:
+            try:
+                name = str(row[0]).strip()
+                vol = int(str(row[1]).replace(",", ""))
+                pct = round(float(row[2]), 2)
+            except (TypeError, ValueError, IndexError):
+                continue
+            cum = round(cum + pct, 2)
+            items.append({"name": name, "vol": vol, "pct": pct, "cum": cum})
+
+        if not items:
+            continue
+        log(f"前十大股票期貨 {iso}: {len(items)} 檔,第一名 {items[0]['name']} {items[0]['vol']}")
+        save_json("top10ssf.json", {
+            "updated": NOW.strftime("%Y-%m-%d %H:%M"),
+            "date": iso,
+            "items": items,
+        })
+        return True
+
+    log("前十大股票期貨:近6日皆無資料")
+    return False
+
+
 # ---------- 主流程 ----------
 def main():
     if NOW.weekday() >= 5 and not FORCE:
@@ -751,7 +828,8 @@ def main():
     for name, fn in (("期貨/散戶多空比", update_futures),
                      ("選擇權最大OI", update_options),
                      ("融資/成交量", update_margin),
-                     ("加權指數/台積電影響", update_taiex_tsmc)):
+                     ("加權指數/台積電影響", update_taiex_tsmc),
+                     ("前十大股票期貨", update_top10_ssf)):
         try:
             results[name] = fn()
         except Exception as e:

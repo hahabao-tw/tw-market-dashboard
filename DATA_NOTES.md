@@ -71,6 +71,19 @@
 ```
 大台、小台、微台各自計算。此為估算值(全市場減去法人),非官方直接數字。
 
+### 2-5. 每日前十大交易量股票期貨(活動專區 API)
+
+- **端點**:`POST https://www.taifex.com.tw/eventTaifexTradingCenter/api/ssf/topTenSSFVolume`
+- **Referer**:`https://www.taifex.com.tw/eventTaifexTradingCenter/cht/ssf.do`
+- **送出格式**:JSON body(不是表單!),`{"date":"YYYY/MM/DD","showType":false,"lang":"cht","initFlag":"true"}`
+  - `showType:false` = 不含夜盤(一般交易時段)
+- **回傳**:`{"data":"[[\"群創期貨\",\"61572\",\"6.954...\"],...]"}`
+  - 注意:`data` 是「字串包著的陣列」,要 json.loads 兩次。
+  - 每筆 = [商品名稱, 成交量, **個別**佔比%]。
+- **累加佔比**:第三欄是個別佔比(加總約 42%),柏拉圖的折線要自己逐筆累加。
+- **特性**:這是「活動專區/觀測站」的 API,非正規資料頁,改版風險較高;頁面為 SPA,
+  須用 DevTools Network 才能找到此 API。是用戶用 DevTools 抓出來的。
+
 ### 2-4. 臺指選擇權 P/C 比(買賣權未平倉量比率)
 
 - **端點**:`POST https://www.taifex.com.tw/cht/3/pcRatioDown`

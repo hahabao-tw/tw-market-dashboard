@@ -152,6 +152,7 @@
       <a href="#inst">三大法人</a>
       <a href="#retail">散戶多空比</a>
       <a href="#options">選擇權OI</a>
+      <a href="#top10ssf">前十大股期</a>
     </nav>
     <div class="fontctl" id="fontctl">
       <button data-act="dec" title="縮小字體">A−</button>
@@ -231,6 +232,17 @@
     </div>
   </section>
 
+  <!-- 5. 每日前十大交易量股票期貨 -->
+  <section id="top10ssf">
+    <div class="sec-head">
+      <h2>每日前十大交易量股票期貨</h2>
+      <span class="note" id="top10-date">--</span>
+    </div>
+    <div class="card">
+      <div id="chart-top10" class="chart" style="height:420px"></div>
+    </div>
+  </section>
+
   <footer>
     資料來源:臺灣證券交易所、臺灣期貨交易所(每日盤後自動抓取)。<br>
     散戶多空比為估算值:以全市場未平倉減去三大法人部位推得。本頁僅供參考,不構成投資建議。
@@ -284,6 +296,53 @@
   }
   window.addEventListener('resize', ()=>charts.forEach(c=>c.resize()));
 
+  // ───────────────── 5. 每日前十大交易量股票期貨(柏拉圖) ─────────────────
+  (function secTop10(){
+    const el = document.getElementById('chart-top10');
+    if(!top10ssf || !top10ssf.items || !top10ssf.items.length){
+      emptyCard(el); return;
+    }
+    document.getElementById('top10-date').textContent =
+      '資料日:'+top10ssf.date+'|一般交易時段(不含夜盤)';
+    const items = top10ssf.items;
+    const names = items.map(i=>i.name);
+    const vols = items.map(i=>i.vol);
+    const cums = items.map(i=>i.cum);
+    // 十色漸層,呼應原圖的彩色長條
+    const palette = ['#ff5d3b','#ffb02e','#a3d65c','#3fbf5f','#19c3d6',
+                     '#2f9bf0','#3a6ef0','#2d2df0','#6a1fb0','#9b3fd6'];
+
+    mkChart('chart-top10').setOption(Object.assign({}, baseOpt, {
+      legend:Object.assign({},baseOpt.legend,{data:['交易量','累加佔比']}),
+      grid:{left:8,right:8,top:36,bottom:54,containLabel:true},
+      tooltip:Object.assign({},baseOpt.tooltip,{
+        formatter:p=>{
+          const i = p[0].dataIndex;
+          return names[i]+'<br/>交易量: '+fmt(vols[i])+' 口<br/>'+
+                 '個別佔比: '+items[i].pct+'%<br/>累加佔比: '+cums[i]+'%';
+        }}),
+      xAxis:{type:'category', data:names,
+        axisLine:{lineStyle:{color:'#2e3340'}},
+        axisLabel:{fontSize:10,color:'#9b9fa9',interval:0,rotate:38}},
+      yAxis:[
+        axisY({name:'交易量(口)'}),
+        axisY({name:'累加佔比%', max:100, splitLine:{show:false},
+          axisLabel:{fontSize:10,color:'#8b8f9a',formatter:'{value}%'}}),
+      ],
+      series:[
+        {name:'交易量', type:'bar', data:vols, barMaxWidth:34,
+         itemStyle:{color:p=>palette[p.dataIndex % palette.length]},
+         label:{show:true, position:'top', color:'#cfd2d8', fontSize:10,
+           formatter:o=>fmt(o.value)}},
+        {name:'累加佔比', type:'line', yAxisIndex:1, data:cums,
+         lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'},
+         symbol:'circle', symbolSize:5,
+         label:{show:true, color:'#e8b04b', fontSize:10,
+           formatter:o=>o.value+'%'}},
+      ],
+    }));
+  })();
+
   // ── 字體縮放控制 ──
   (function fontControl(){
     const ctl = document.getElementById('fontctl');
@@ -309,11 +368,12 @@
   })();
 
   // ───────────────── 載入三份資料 ─────────────────
-  const [margin, futures, options, taiex] = await Promise.all([
+  const [margin, futures, options, taiex, top10ssf] = await Promise.all([
     loadJSON('data/margin.json'),
     loadJSON('data/futures.json'),
     loadJSON('data/options.json'),
     loadJSON('data/taiex.json'),
+    loadJSON('data/top10ssf.json'),
   ]);
 
   // ───────────────── 盤後快照 ─────────────────
