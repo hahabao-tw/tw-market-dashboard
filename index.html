@@ -296,53 +296,6 @@
   }
   window.addEventListener('resize', ()=>charts.forEach(c=>c.resize()));
 
-  // ───────────────── 5. 每日前十大交易量股票期貨(柏拉圖) ─────────────────
-  (function secTop10(){
-    const el = document.getElementById('chart-top10');
-    if(!top10ssf || !top10ssf.items || !top10ssf.items.length){
-      emptyCard(el); return;
-    }
-    document.getElementById('top10-date').textContent =
-      '資料日:'+top10ssf.date+'|一般交易時段(不含夜盤)';
-    const items = top10ssf.items;
-    const names = items.map(i=>i.name);
-    const vols = items.map(i=>i.vol);
-    const cums = items.map(i=>i.cum);
-    // 十色漸層,呼應原圖的彩色長條
-    const palette = ['#ff5d3b','#ffb02e','#a3d65c','#3fbf5f','#19c3d6',
-                     '#2f9bf0','#3a6ef0','#2d2df0','#6a1fb0','#9b3fd6'];
-
-    mkChart('chart-top10').setOption(Object.assign({}, baseOpt, {
-      legend:Object.assign({},baseOpt.legend,{data:['交易量','累加佔比']}),
-      grid:{left:8,right:8,top:36,bottom:54,containLabel:true},
-      tooltip:Object.assign({},baseOpt.tooltip,{
-        formatter:p=>{
-          const i = p[0].dataIndex;
-          return names[i]+'<br/>交易量: '+fmt(vols[i])+' 口<br/>'+
-                 '個別佔比: '+items[i].pct+'%<br/>累加佔比: '+cums[i]+'%';
-        }}),
-      xAxis:{type:'category', data:names,
-        axisLine:{lineStyle:{color:'#2e3340'}},
-        axisLabel:{fontSize:10,color:'#9b9fa9',interval:0,rotate:38}},
-      yAxis:[
-        axisY({name:'交易量(口)'}),
-        axisY({name:'累加佔比%', max:100, splitLine:{show:false},
-          axisLabel:{fontSize:10,color:'#8b8f9a',formatter:'{value}%'}}),
-      ],
-      series:[
-        {name:'交易量', type:'bar', data:vols, barMaxWidth:34,
-         itemStyle:{color:p=>palette[p.dataIndex % palette.length]},
-         label:{show:true, position:'top', color:'#cfd2d8', fontSize:10,
-           formatter:o=>fmt(o.value)}},
-        {name:'累加佔比', type:'line', yAxisIndex:1, data:cums,
-         lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'},
-         symbol:'circle', symbolSize:5,
-         label:{show:true, color:'#e8b04b', fontSize:10,
-           formatter:o=>o.value+'%'}},
-      ],
-    }));
-  })();
-
   // ── 字體縮放控制 ──
   (function fontControl(){
     const ctl = document.getElementById('fontctl');
@@ -677,6 +630,52 @@
       render();
     });
     render();
+  })();
+
+  // ───────────────── 5. 每日前十大交易量股票期貨(柏拉圖) ─────────────────
+  (function secTop10(){
+    const el = document.getElementById('chart-top10');
+    if(!top10ssf || !top10ssf.items || !top10ssf.items.length){
+      emptyCard(el); return;
+    }
+    document.getElementById('top10-date').textContent =
+      '資料日:'+top10ssf.date+'|一般交易時段(不含夜盤)';
+    const items = top10ssf.items;
+    const names = items.map(i=>i.name);
+    const vols = items.map(i=>i.vol);
+    const cums = items.map(i=>i.cum);
+    const palette = ['#ff5d3b','#ffb02e','#a3d65c','#3fbf5f','#19c3d6',
+                     '#2f9bf0','#3a6ef0','#2d2df0','#6a1fb0','#9b3fd6'];
+
+    mkChart('chart-top10').setOption(Object.assign({}, baseOpt, {
+      legend:Object.assign({},baseOpt.legend,{data:['交易量','累加佔比']}),
+      grid:{left:8,right:8,top:36,bottom:54,containLabel:true},
+      tooltip:Object.assign({},baseOpt.tooltip,{
+        formatter:p=>{
+          const i = p[0].dataIndex;
+          return names[i]+'<br/>交易量: '+fmt(vols[i])+' 口<br/>'+
+                 '個別佔比: '+items[i].pct+'%<br/>累加佔比: '+cums[i]+'%';
+        }}),
+      xAxis:{type:'category', data:names,
+        axisLine:{lineStyle:{color:'#2e3340'}},
+        axisLabel:{fontSize:10,color:'#9b9fa9',interval:0,rotate:38}},
+      yAxis:[
+        axisY({name:'交易量(口)'}),
+        axisY({name:'累加佔比%', max:100, splitLine:{show:false},
+          axisLabel:{fontSize:10,color:'#8b8f9a',formatter:'{value}%'}}),
+      ],
+      series:[
+        {name:'交易量', type:'bar', data:vols, barMaxWidth:34,
+         itemStyle:{color:p=>palette[p.dataIndex % palette.length]},
+         label:{show:true, position:'top', color:'#cfd2d8', fontSize:10,
+           formatter:o=>fmt(o.value)}},
+        {name:'累加佔比', type:'line', yAxisIndex:1, data:cums,
+         lineStyle:{color:'#e8b04b',width:2}, itemStyle:{color:'#e8b04b'},
+         symbol:'circle', symbolSize:5,
+         label:{show:true, color:'#e8b04b', fontSize:10,
+           formatter:o=>o.value+'%'}},
+      ],
+    }));
   })();
 })();
 </script>
