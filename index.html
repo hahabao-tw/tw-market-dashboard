@@ -289,7 +289,7 @@
     const ctl = document.getElementById('fontctl');
     if(!ctl) return;
     const MIN=0.8, MAX=1.6, STEP=0.1;
-    let scale = 1;
+    let scale = 1.1;   // 預設字級提高一級
     try{ const s=parseFloat(localStorage.getItem('fontScale')); if(s) scale=s; }catch(e){}
     function apply(){
       scale = Math.min(MAX, Math.max(MIN, Math.round(scale*10)/10));
@@ -302,10 +302,10 @@
       const a=b.dataset.act;
       if(a==='inc') scale+=STEP;
       else if(a==='dec') scale-=STEP;
-      else scale=1;
+      else scale=1.1;   // 恢復預設(已提高一級)
       apply();
     });
-    if(scale!==1) apply();
+    if(scale!==1.1) apply(); else apply();
   })();
 
   // ───────────────── 載入三份資料 ─────────────────
@@ -438,7 +438,7 @@
       yAxis:[axisY({name:'億元'})],
       series:[
         {name:'成交金額', type:'bar', data:rows.map(r=>r.turnover),
-         itemStyle:{color:'#3a4154'}, barWidth:'55%'},
+         itemStyle:{color:'#4a8fb8'}, barWidth:'55%'},
       ],
     }));
   })();

@@ -577,9 +577,25 @@ def update_margin():
             changed = True
 
     if changed:
+        # 清理:剔除明顯異常的舊髒資料(例如混入的數年前資料)
+        # 規則:只保留最新日期往前算 120 天內的資料
         rows.sort(key=lambda r: r["date"])
+        if rows:
+            latest_d = datetime.strptime(rows[-1]["date"], "%Y-%m-%d").date()
+            cutoff = (latest_d - timedelta(days=120)).strftime("%Y-%m-%d")
+            rows = [r for r in rows if r["date"] >= cutoff]
+        # 計算每日增減;若與前一筆日期間隔過大(>15天,代表中間斷層),
+        # 該筆不計增減(設 0),避免跨斷層相減爆出假跳動
         for i, r in enumerate(rows):
-            r["change"] = round(r["balance"] - rows[i - 1]["balance"], 1) if i else 0
+            if i == 0:
+                r["change"] = 0
+                continue
+            d_cur = datetime.strptime(r["date"], "%Y-%m-%d").date()
+            d_prev = datetime.strptime(rows[i-1]["date"], "%Y-%m-%d").date()
+            if (d_cur - d_prev).days > 15:
+                r["change"] = 0
+            else:
+                r["change"] = round(r["balance"] - rows[i-1]["balance"], 1)
         data["rows"] = rows[-KEEP_DAYS:]
         data["updated"] = NOW.strftime("%Y-%m-%d %H:%M")
         save_json("margin.json", data)
