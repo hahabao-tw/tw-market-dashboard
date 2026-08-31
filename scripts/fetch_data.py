@@ -4,7 +4,7 @@
 台股市場儀表板 - 每日資料抓取腳本
 資料來源:證交所(TWSE)、期交所(TAIFEX)
 只用 Python 標準庫,不需安裝任何套件。
-邏輯:冪等更新 —— 抓到的資料若已存在就跳過,假日抓不到新資料就什麼都不做。
+邏輯:冪等更新 —— 期貨重驗最近交易日並依日期覆寫;未完成資料不落盤。
 """
 
 import csv
@@ -23,7 +23,7 @@ NOW = datetime.now(TPE)
 TODAY = NOW.strftime("%Y-%m-%d")
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 KEEP_DAYS = 60  # 歷史最多保留筆數(交易日);前端顯示取最近 30 筆
-FORCE = os.environ.get("FORCE", "0") == "1"  # 手動觸發時可在假日強制執行
+FORCE = os.environ.get("FORCE", "0") == "1"  # 手動觸發時可強制重驗部分同日資料
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -33,6 +33,9 @@ PRODUCTS = {  # 期交所商品代碼 ↔ 三大法人報表中的商品名稱
     "MTX": {"name": "小型臺指期貨", "label": "小台"},
     "TMF": {"name": "微型臺指期貨", "label": "微台"},
 }
+INSTITUTION_ROLES = ("自營商", "投信", "外資")
+REFETCH_ROWS = 3  # 每次重驗最近交易日,讓官方修訂可自動覆寫
+READY_LOOKBACK_DAYS = 15  # 此範圍仍找不到已揭露日,視為來源異常而非普通假日
 
 
 # ---------- 小工具 ----------
@@ -146,6 +149,59 @@ def trim_history(rows):
     return rows[-KEEP_DAYS:]
 
 
+def normalize_institutional_roles(roles):
+    """將期交所身份名稱歸一化;三類資料不完整時回傳 None。"""
+    out = {role: {"l": 0, "s": 0} for role in INSTITUTION_ROLES}
+    found = set()
+    for raw_role, values in (roles or {}).items():
+        key = next((role for role in INSTITUTION_ROLES if role in raw_role), None)
+        if key is None:
+            continue
+        lo, so = values.get("l"), values.get("s")
+        if lo is None or so is None or lo < 0 or so < 0:
+            return None
+        out[key]["l"] += lo
+        out[key]["s"] += so
+        found.add(key)
+    if found != set(INSTITUTION_ROLES):
+        return None
+    return {
+        role: {"l": v["l"], "s": v["s"], "net": v["l"] - v["s"]}
+        for role, v in out.items()
+    }
+
+
+def normalize_institutional_day(day):
+    """回傳三個目標商品的歸一化法人資料;任一商品不完整則回傳 None。"""
+    out = {}
+    for code, meta in PRODUCTS.items():
+        roles = normalize_institutional_roles((day or {}).get(meta["name"]))
+        if roles is None:
+            return None
+        out[code] = roles
+    return out
+
+
+def has_institutional_positions(day):
+    return any(
+        value
+        for roles in (day or {}).values()
+        for role in roles.values()
+        for value in (role["l"], role["s"])
+    )
+
+
+def is_provisional_zero_record(record):
+    """全市場 OI 已有值,但三類法人多空 OI 全零的過渡期資料。"""
+    roles = record.get("inst") or {}
+    if record.get("total", 0) <= 0 or not all(role in roles for role in INSTITUTION_ROLES):
+        return False
+    return all(
+        roles[role].get("l") == 0 and roles[role].get("s") == 0
+        for role in INSTITUTION_ROLES
+    )
+
+
 # ---------- 1. 期交所:三大法人 + 全市場未平倉 → 散戶多空比 ----------
 def fetch_taifex_institutional(start, end):
     """回傳 {date: {商品名稱: {身份別: {'l':多方OI, 's':空方OI}}}}"""
@@ -184,6 +240,26 @@ def fetch_taifex_institutional(start, end):
             out.setdefault(d, {}).setdefault(prod, {})[role] = {"l": lo, "s": so}
         time.sleep(2)
     return out
+
+
+def fetch_latest_ready_institutional(start, end):
+    """往前找最近已完整揭露日,避免當日或假日終點使區間下載回 HTML。"""
+    candidate = end
+    for _ in range(READY_LOOKBACK_DAYS):
+        if candidate < start:
+            break
+        if candidate.weekday() < 5:
+            one_day = fetch_taifex_institutional(candidate, candidate)
+            normalized = normalize_institutional_day(
+                one_day.get(candidate.strftime("%Y-%m-%d"))
+            )
+            if normalized is not None and has_institutional_positions(normalized):
+                if candidate == start:
+                    return one_day, candidate
+                return fetch_taifex_institutional(start, candidate), candidate
+            time.sleep(1)
+        candidate -= timedelta(days=1)
+    return {}, None
 
 
 def fetch_taifex_market_oi(code, start, end):
@@ -231,55 +307,125 @@ def update_futures():
     for code in PRODUCTS:
         hist.setdefault(code, [])
 
-    # 已有今天的資料就跳過
-    done = all(h and h[-1]["date"] == TODAY for h in hist.values())
-    if done:
-        log("期貨資料今日已更新,跳過")
-        return False
-
-    # 需要回補的起點:取三商品中最舊的「最後日期」,沒有資料就抓 45 天
-    last_dates = [h[-1]["date"] for h in hist.values() if h]
-    if last_dates and len(last_dates) == len(PRODUCTS):
-        start = datetime.strptime(min(last_dates), "%Y-%m-%d").date() + timedelta(days=1)
-    else:
-        start = (NOW - timedelta(days=45)).date()
-    end = NOW.date()
-    if start > end:
-        return False
-
-    log(f"抓取期貨資料 {start} ~ {end}")
-    inst = fetch_taifex_institutional(start, end)
-    if not inst:
-        log("三大法人無新資料(可能是假日或尚未公布)")
-        return False
-
+    by_date = {
+        code: {r["date"]: r for r in hist[code]}
+        for code in PRODUCTS
+    }
     changed = False
-    for code, meta in PRODUCTS.items():
-        total_oi = fetch_taifex_market_oi(code, start, end)
-        existing = {r["date"] for r in hist[code]}
-        for d in sorted(inst.keys()):
-            if d in existing:
-                continue
-            roles = inst[d].get(meta["name"])
-            total = total_oi.get(d)
-            if not roles or not total:
-                continue
+
+    # 升級後先清掉舊版可能已寫入的共同全零日,
+    # 若官方仍未揭露,前端會回退到上一個有效交易日。
+    common_dates = set.intersection(*(
+        set(by_date[code]) for code in PRODUCTS
+    ))
+    for d in sorted(common_dates):
+        if all(is_provisional_zero_record(by_date[code][d]) for code in PRODUCTS):
+            for code in PRODUCTS:
+                del by_date[code][d]
+            changed = True
+            log(f"移除已存的法人 OI 全零資料: {d}")
+
+    # 每個商品都往回重驗最近 REFETCH_ROWS 筆,並取最早起點共用。
+    # 這比固定回看幾個日曆日更能涵蓋連假日與官方事後修訂。
+    overlap_starts = []
+    for code in PRODUCTS:
+        rows = list(by_date[code].values())
+        if not rows:
+            overlap_starts.append((NOW - timedelta(days=45)).date())
+            continue
+        dates = sorted({r["date"] for r in rows})
+        overlap_starts.append(
+            datetime.strptime(dates[-REFETCH_ROWS], "%Y-%m-%d").date()
+            if len(dates) >= REFETCH_ROWS else
+            datetime.strptime(dates[0], "%Y-%m-%d").date()
+        )
+    start = min(overlap_starts)
+    # 14:55 首班時法人 OI 尚未揭露;當日最早從 15:10 開始探測。
+    latest_candidate = NOW.date()
+    if (NOW.hour, NOW.minute) < (15, 10):
+        latest_candidate -= timedelta(days=1)
+    if start > latest_candidate:
+        return False
+
+    log(f"抓取期貨資料 {start} ~ {latest_candidate}")
+    inst, end = fetch_latest_ready_institutional(start, latest_candidate)
+    if not inst:
+        raise RuntimeError(
+            f"三大法人近 {READY_LOOKBACK_DAYS} 日無可驗證資料;"
+            "可能是期交所回傳格式或端點已變更"
+        )
+    log(f"期貨最新已揭露日: {end}")
+
+    market_oi = (
+        {code: fetch_taifex_market_oi(code, start, end) for code in PRODUCTS}
+        if inst else {code: {} for code in PRODUCTS}
+    )
+    latest_date = end.strftime("%Y-%m-%d")
+    missing_latest_market = [
+        code for code in PRODUCTS
+        if market_oi[code].get(latest_date, 0) <= 0
+    ]
+    if missing_latest_market:
+        raise RuntimeError(
+            f"{latest_date} 全市場 OI 無可驗證資料: "
+            f"{', '.join(missing_latest_market)};可能是期交所回傳格式或端點已變更"
+        )
+
+    for d in sorted(inst.keys()):
+        day = {}
+        normalized = normalize_institutional_day(inst[d])
+        for code in PRODUCTS:
+            total = market_oi[code].get(d)
+            roles = normalized.get(code) if normalized is not None else None
+            if total is None or total <= 0 or roles is None:
+                break
+            day[code] = {"total": total, "roles": roles}
+        if len(day) != len(PRODUCTS):
+            log(f"{d} 期貨資料不完整,不做部分寫入")
+            continue
+
+        # 期交所可能先回傳交易日與全市場 OI,但法人 OI 在公布前為 0。
+        # 只擋住「三商品跨角色全零」,不會誤殺單一角色合法 0/0。
+        if not has_institutional_positions({
+            code: item["roles"] for code, item in day.items()
+        }):
+            log(f"{d} 法人 OI 尚未揭露(三商品全零),不寫入")
+            continue
+
+        institutional_totals = {}
+        invalid_code = None
+        for code, item in day.items():
+            total, roles = item["total"], item["roles"]
             inst_l = sum(v["l"] for v in roles.values())
             inst_s = sum(v["s"] for v in roles.values())
-            retail_l = max(total - inst_l, 0)
-            retail_s = max(total - inst_s, 0)
-            ratio = round((retail_l - retail_s) / total * 100, 2) if total else 0
-            simplify = {}
-            for role, v in roles.items():
-                key = "外資" if "外資" in role else ("投信" if "投信" in role else "自營商")
-                simplify[key] = {"l": v["l"], "s": v["s"], "net": v["l"] - v["s"]}
-            hist[code].append({
-                "date": d, "total": total, "inst": simplify,
+            if inst_l > total or inst_s > total:
+                invalid_code = code
+                log(
+                    f"{d} {code} 法人 OI 合計超過全市場 OI"
+                    f"(多 {inst_l}/{total},空 {inst_s}/{total}),整日不寫入"
+                )
+                break
+            institutional_totals[code] = (inst_l, inst_s)
+        if invalid_code is not None:
+            continue
+
+        for code, item in day.items():
+            total, roles = item["total"], item["roles"]
+            inst_l, inst_s = institutional_totals[code]
+            retail_l = total - inst_l
+            retail_s = total - inst_s
+            ratio = round((retail_l - retail_s) / total * 100, 2)
+            record = {
+                "date": d, "total": total, "inst": roles,
                 "retail": {"l": retail_l, "s": retail_s,
                            "net": retail_l - retail_s, "ratio": ratio},
-            })
-            changed = True
-        hist[code] = trim_history(hist[code])
+            }
+            if by_date[code].get(d) != record:
+                by_date[code][d] = record
+                changed = True
+
+    for code in PRODUCTS:
+        hist[code] = trim_history(list(by_date[code].values()))
 
     if changed:
         data["updated"] = NOW.strftime("%Y-%m-%d %H:%M")
@@ -820,11 +966,9 @@ def update_top10_ssf():
 
 # ---------- 主流程 ----------
 def main():
-    if NOW.weekday() >= 5 and not FORCE:
-        log("週末,不執行")
-        return
     os.makedirs(DATA_DIR, exist_ok=True)
     results = {}
+    errors = []
     for name, fn in (("期貨/散戶多空比", update_futures),
                      ("選擇權最大OI", update_options),
                      ("融資/成交量", update_margin),
@@ -835,7 +979,11 @@ def main():
         except Exception as e:
             log(f"{name} 發生錯誤: {e}")
             results[name] = f"錯誤: {e}"
+            errors.append(f"{name}: {e}")
     log(f"執行結果: {results}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return results
 
 
 if __name__ == "__main__":

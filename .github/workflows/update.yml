@@ -3,6 +3,7 @@ name: 更新市場資料
 on:
   schedule:
     # GitHub 排程用 UTC 時間;台北時間 = UTC + 8
+    # 每個班次都執行完整 pipeline;行尾為該時段的主要補抓重點
     - cron: '55 6 * * 1-5'   # 台北 14:55  期貨/選擇權
     - cron: '15 7 * * 1-5'   # 台北 15:15  期貨/選擇權
     - cron: '40 7 * * 1-5'   # 台北 15:40  選擇權補抓
@@ -31,6 +32,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: 執行邊界測試
+        run: python -B -m unittest discover -s tests -p "test_*.py" -v
 
       - name: 抓取資料
         env:
